@@ -1,6 +1,6 @@
 {
   "schema_name": "DoclingDocument",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "name": "2408.09869v3",
   "furniture": {
     "self_ref": "#/furniture",
@@ -2516,6 +2516,7 @@
         ],
         "num_rows": 4,
         "num_cols": 8,
+        "orientation": "rot_0",
         "grid": [
           [
             {

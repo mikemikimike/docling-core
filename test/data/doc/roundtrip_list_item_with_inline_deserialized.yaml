@@ -90,8 +90,8 @@ groups:
 key_value_items: []
 name: Document
 pages:
-  '0':
-    page_no: 0
+  '1':
+    page_no: 1
     size:
       height: 512.0
       width: 512.0
@@ -123,13 +123,13 @@ texts:
   content_layer: body
   footnotes: []
   label: code
-  orig: help()
+  orig: "\n      help()\n    "
   parent:
     $ref: '#/groups/0'
   prov: []
   references: []
   self_ref: '#/texts/2'
-  text: help()
+  text: "\n      help()\n    "
 - children: []
   content_layer: body
   label: text
@@ -358,4 +358,4 @@ texts:
   prov: []
   self_ref: '#/texts/23'
   text: final element
-version: 1.9.0
+version: 1.10.0

@@ -1,6 +1,6 @@
 {
   "schema_name": "DoclingDocument",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "name": "2501.17887v1 + Untitled 1 + 2311.18481v1",
   "furniture": {
     "self_ref": "#/furniture",
@@ -12790,7 +12790,7 @@
           "width": 64.0,
           "height": 64.0
         },
-        "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAIklEQVR4nO3BAQ0AAADCoPdPbQ8HFAAAAAAAAAAAAAAA8G4wQAABiwCo9wAAAABJRU5ErkJggg=="
+        "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAdElEQVRoBdXBAQEAAABAIP6ftkPJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMzJnMwFULoAQbykEYoAAAAASUVORK5CYII="
       },
       "annotations": []
     },
@@ -13411,6 +13411,7 @@
         ],
         "num_rows": 5,
         "num_cols": 5,
+        "orientation": "rot_0",
         "grid": [
           [
             {
@@ -14031,6 +14032,7 @@
         ],
         "num_rows": 3,
         "num_cols": 3,
+        "orientation": "rot_0",
         "grid": [
           [
             {
@@ -14611,6 +14613,7 @@
         ],
         "num_rows": 7,
         "num_cols": 3,
+        "orientation": "rot_0",
         "grid": [
           [
             {

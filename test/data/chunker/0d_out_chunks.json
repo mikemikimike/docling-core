@@ -1,6 +1,6 @@
 [
     {
-        "text": "In this image we can see a cartoon image of a duck holding a paper.\n\n<!-- image -->",
+        "text": "<!-- image -->\n\nIn this image we can see a cartoon image of a duck holding a paper.",
         "meta": {
             "doc_items": [
                 "#/pictures/0"
@@ -104,13 +104,13 @@
         }
     },
     {
-        "text": "Two basic requirements to process PDF documents in our pipeline are a) to retrieve all text content and their geometric coordinates on each page and b) to render the visual representation of each page as it would appear in a PDF viewer. Both these requirements are encapsulated in Docling's PDF backend interface. While there are several open-source PDF parsing libraries available for python, we faced major obstacles with all of them for different reasons, among which were restrictive\n1 see huggingface.co/ds4sd/docling-models/\nIn this image, we can see some text and images.\n\nFigure 1: Sketch of Docling's default processing pipeline. The inner part of the model pipeline is easily customizable and extensible.\n\n<!-- image -->\nlicensing (e.g. pymupdf [7]), poor speed or unrecoverable quality issues, such as merged text cells across far-apart text tokens or table columns (pypdfium, PyPDF) [15, 14].",
+        "text": "Two basic requirements to process PDF documents in our pipeline are a) to retrieve all text content and their geometric coordinates on each page and b) to render the visual representation of each page as it would appear in a PDF viewer. Both these requirements are encapsulated in Docling's PDF backend interface. While there are several open-source PDF parsing libraries available for python, we faced major obstacles with all of them for different reasons, among which were restrictive\n1 see huggingface.co/ds4sd/docling-models/\nFigure 1: Sketch of Docling's default processing pipeline. The inner part of the model pipeline is easily customizable and extensible.\n\n<!-- image -->\n\nIn this image, we can see some text and images.\nlicensing (e.g. pymupdf [7]), poor speed or unrecoverable quality issues, such as merged text cells across far-apart text tokens or table columns (pypdfium, PyPDF) [15, 14].",
         "meta": {
             "doc_items": [
                 "#/texts/28",
                 "#/texts/29",
-                "#/pictures/1",
                 "#/texts/31",
+                "#/pictures/1",
                 "#/texts/47"
             ],
             "headings": [
@@ -259,7 +259,7 @@
         }
     },
     {
-        "text": "Table 1: Runtime characteristics of Docling with the standard model pipeline and settings, on our test dataset of 225 pages, on two different systems. OCR is disabled. We show the time-to-solution (TTS), computed throughput in pages per second, and the peak memory used (resident set size) for both the Docling-native PDF backend and for the pypdfium backend, using 4 and 16 threads.\n| CPU | Thread budget | native backend | native backend | native backend | pypdfium backend | pypdfium backend | pypdfium backend || - | - | - | - | - | - | - | - ||  |  | TTS | Pages/s | Mem | TTS | Pages/s | Mem || Apple M3 Max | 4 | 177 s 167 s | 1.27 1.34 | 6.20 GB | 103 s 92 s | 2.18 2.45 | 2.56 GB |",
+        "text": "Table 1: Runtime characteristics of Docling with the standard model pipeline and settings, on our test dataset of 225 pages, on two different systems. OCR is disabled. We show the time-to-solution (TTS), computed throughput in pages per second, and the peak memory used (resident set size) for both the Docling-native PDF backend and for the pypdfium backend, using 4 and 16 threads.\n\n| CPU | Thread budget | native backend | native backend | native backend | pypdfium backend | pypdfium backend | pypdfium backend |\n| - | - | - | - | - | - | - | - |\n|  |  | TTS | Pages/s | Mem | TTS | Pages/s | Mem |\n| Apple M3 Max | 4 | 177 s 167 s | 1.27 1.34 | 6.20 GB | 103 s 92 s | 2.18 2.45 | 2.56 GB |\n",
         "meta": {
             "doc_items": [
                 "#/tables/0"
@@ -271,7 +271,7 @@
         }
     },
     {
-        "text": "Table 1: Runtime characteristics of Docling with the standard model pipeline and settings, on our test dataset of 225 pages, on two different systems. OCR is disabled. We show the time-to-solution (TTS), computed throughput in pages per second, and the peak memory used (resident set size) for both the Docling-native PDF backend and for the pypdfium backend, using 4 and 16 threads.\n| CPU | Thread budget | native backend | native backend | native backend | pypdfium backend | pypdfium backend | pypdfium backend || (16 cores) Intel(R) Xeon E5-2690 | 16 4 16 | 375 s 244 s | 0.60 0.92 | 6.16 GB | 239 s 143 s | 0.94 1.57 | 2.42 GB |",
+        "text": "| CPU | Thread budget | native backend | native backend | native backend | pypdfium backend | pypdfium backend | pypdfium backend |\n| - | - | - | - | - | - | - | - |\n| (16 cores) Intel(R) Xeon E5-2690 | 16 4 16 | 375 s 244 s | 0.60 0.92 | 6.16 GB | 239 s 143 s | 0.94 1.57 | 2.42 GB |",
         "meta": {
             "doc_items": [
                 "#/tables/0"
@@ -557,7 +557,7 @@
         }
     },
     {
-        "text": "Birgit Pfitzmann, Christoph Auer, Michele Dolfi, Ahmed S. Nassar, and Peter Staar. 2022. DocLayNet: A Large Human-Annotated Dataset for DocumentLayout Analysis. In Proceedings of the 28th ACM SIGKDD Conference on Knowledge Discovery and Data Mining (KDD '22), August 14-18, 2022, Washington, DC, USA. ACM, New York, NY, USA, 9 pages. https://doi.org/10.1145/ 3534678.3539043\nIn this image there is a table with some text on it.\n\n<!-- image -->\nIn this image we can see a text.\n\n<!-- image -->\nAGL Energy Limited  ABN 74 1\n5 061 375\nIn this image I can see the text on the image.\n\n<!-- image -->\nIn this image there is a paper with some text on it.\n\n<!-- image -->\nFigure 1: Four examples of complex page layouts across different document categories",
+        "text": "Birgit Pfitzmann, Christoph Auer, Michele Dolfi, Ahmed S. Nassar, and Peter Staar. 2022. DocLayNet: A Large Human-Annotated Dataset for DocumentLayout Analysis. In Proceedings of the 28th ACM SIGKDD Conference on Knowledge Discovery and Data Mining (KDD '22), August 14-18, 2022, Washington, DC, USA. ACM, New York, NY, USA, 9 pages. https://doi.org/10.1145/ 3534678.3539043\n<!-- image -->\n\nIn this image there is a table with some text on it.\n<!-- image -->\n\nIn this image we can see a text.\nAGL Energy Limited  ABN 74 1\n5 061 375\n<!-- image -->\n\nIn this image I can see the text on the image.\n<!-- image -->\n\nIn this image there is a paper with some text on it.\nFigure 1: Four examples of complex page layouts across different document categories",
         "meta": {
             "doc_items": [
                 "#/texts/128",
@@ -638,7 +638,7 @@
         }
     },
     {
-        "text": "to avoid this at any cost in order to have clear, unbiased baseline numbers for human document-layout annotation. Third, we introduced the feature of snapping boxes around text segments to obtain a pixel-accurate annotation and again reduce time and effort. The CCS annotation tool automatically shrinks every user-drawn box to the minimum bounding-box around the enclosed text-cells for all purely text-based segments, which excludes only Table and Picture . For the latter, we instructed annotation staff to minimise inclusion of surrounding whitespace while including all graphical lines. A downside of snapping boxes to enclosed text cells is that some wrongly parsed PDF pages cannot be annotated correctly and need to be skipped. Fourth, we established a way to flag pages as rejected for cases where no valid annotation according to the label guidelines could be achieved. Example cases for this would be PDF pages that render incorrectly or contain layouts that are impossible to capture with non-overlapping rectangles. Such rejected pages are not contained in the final dataset. With all these measures in place, experienced annotation staff managed to annotate a single page",
+        "text": "to avoid this at any cost in order to have clear, unbiased baseline numbers for human document-layout annotation. Third, we introduced the feature of snapping boxes around text segments to obtain a pixel-accurate annotation and again reduce time and effort. The CCS annotation tool automatically shrinks every user-drawn box to the minimum bounding-box around the enclosed text-cells for all purely text-based segments, which excludes only Table and Picture . For the latter, we instructed annotation staff to minimise inclusion of surrounding whitespace while including all graphical lines. A downside of snapping boxes to enclosed text cells is that some wrongly parsed PDF pages cannot be annotated correctly and need to be skipped. Fourth, we established a way to flag pages as rejected for cases where no valid annotation according to the label guidelines could be achieved. Example cases for this would be PDF pages that render incorrectly or contain layouts that are impossible to capture with non-overlapping rectangles. Such rejected pages are not contained in the final dataset.",
         "meta": {
             "doc_items": [
                 "#/texts/513"
@@ -650,7 +650,7 @@
         }
     },
     {
-        "text": "in a typical timeframe of 20s to 60s, depending on its complexity.",
+        "text": "With all these measures in place, experienced annotation staff managed to annotate a single page in a typical timeframe of 20s to 60s, depending on its complexity.",
         "meta": {
             "doc_items": [
                 "#/texts/513"
@@ -662,7 +662,7 @@
         }
     },
     {
-        "text": "The primary goal of DocLayNet is to obtain high-quality ML models capable of accurate document-layout analysis on a wide variety of challenging layouts. As discussed in Section 2, object detection models are currently the easiest to use, due to the standardisation of ground-truth data in COCO format [16] and the availability of general frameworks such as detectron2 [17]. Furthermore, baseline numbers in PubLayNet and DocBank were obtained using standard object detection models such as Mask R-CNN and Faster R-CNN. As such, we will relate to these object detection methods in this\nIn this image, we can see a table.\n\n<!-- image -->\nThird, achienec",
+        "text": "The primary goal of DocLayNet is to obtain high-quality ML models capable of accurate document-layout analysis on a wide variety of challenging layouts. As discussed in Section 2, object detection models are currently the easiest to use, due to the standardisation of ground-truth data in COCO format [16] and the availability of general frameworks such as detectron2 [17]. Furthermore, baseline numbers in PubLayNet and DocBank were obtained using standard object detection models such as Mask R-CNN and Faster R-CNN. As such, we will relate to these object detection methods in this\n<!-- image -->\n\nIn this image, we can see a table.\nThird, achienec",
         "meta": {
             "doc_items": [
                 "#/texts/515",
@@ -676,7 +676,7 @@
         }
     },
     {
-        "text": "chalenongayouls ground-vuth dawa such WC\nThe image is a line graph that shows the percentage of respondents who have used a specific type of training in the past 24 hours. The x-axis represents the time in hours, while the y-axis represents the percentage of respondents. The graph is titled \"Training.\"\n\nThe graph has two lines: one for the training type and one for the training duration. The training type line is labeled \"Training\" and the training duration line is labeled \"Training Duration.\"\n\nThe graph shows that the percentage of respondents who have used the training type increases as the time increases. Specifically, the percentage of respondents who have used the training type increases from 10% to 20% over the 24-hour period. The percentage of respondents who have used the training duration increases from 10% to 20% over the 24-hour period.\n\nThe graph also shows that the percentage of respondents who have used the training type increases as the\n\n<!-- image -->",
+        "text": "chalenongayouls ground-vuth dawa such WC\n<!-- image -->\n\nThe image is a line graph that shows the percentage of respondents who have used a specific type of training in the past 24 hours. The x-axis represents the time in hours, while the y-axis represents the percentage of respondents. The graph is titled \"Training.\"\n\nThe graph has two lines: one for the training type and one for the training duration. The training type line is labeled \"Training\" and the training duration line is labeled \"Training Duration.\"\n\nThe graph shows that the percentage of respondents who have used the training type increases as the time increases. Specifically, the percentage of respondents who have used the training type increases from 10% to 20% over the 24-hour period. The percentage of respondents who have used the training duration increases from 10% to 20% over the 24-hour period.\n\nThe graph also shows that the percentage of respondents who have used the training type increases as the",
         "meta": {
             "doc_items": [
                 "#/texts/518",
@@ -703,7 +703,7 @@
         }
     },
     {
-        "text": "In Table 2, we present baseline experiments (given in mAP) on Mask R-CNN [12], Faster R-CNN [11], and YOLOv5 [13]. Both training and evaluation were performed on RGB images with dimensions of 1025 \u00d7 1025 pixels. For training, we only used one annotation in case of redundantly annotated pages. As one can observe, the variation in mAP between the models is rather low, but overall between 6 and 10% lower than the mAP computed from the pairwise human annotations on triple-annotated pages. This gives a good indication that the DocLayNet dataset poses a worthwhile challenge for the research community to close the gap between human recognition and ML approaches. It is interesting to see that Mask R-CNN and Faster R-CNN produce very comparable mAP scores, indicating that pixel-based image segmentation derived from bounding-boxes does not help to obtain better predictions. On the other hand, the more recent Yolov5x model does very well and even out-performs humans on selected labels such as Text , Table and Picture . This is not entirely surprising, as Text , Table and",
+        "text": "In Table 2, we present baseline experiments (given in mAP) on Mask R-CNN [12], Faster R-CNN [11], and YOLOv5 [13]. Both training and evaluation were performed on RGB images with dimensions of 1025 \u00d7 1025 pixels. For training, we only used one annotation in case of redundantly annotated pages. As one can observe, the variation in mAP between the models is rather low, but overall between 6 and 10% lower than the mAP computed from the pairwise human annotations on triple-annotated pages. This gives a good indication that the DocLayNet dataset poses a worthwhile challenge for the research community to close the gap between human recognition and ML approaches. It is interesting to see that Mask R-CNN and Faster R-CNN produce very comparable mAP scores, indicating that pixel-based image segmentation derived from bounding-boxes does not help to obtain better predictions. On the other hand, the more recent Yolov5x model does very well and even out-performs humans on selected labels such as Text , Table and Picture .",
         "meta": {
             "doc_items": [
                 "#/texts/523"
@@ -715,7 +715,7 @@
         }
     },
     {
-        "text": "Picture are abundant and the most visually distinctive in a document.\ncoioct dcochon modols\nmak enbrel\nFigure 3: Page 6 of the DocLayNet paper. If recognized, metadata such as authors are appearing first under the title. Elements recognized as page headers or footers are suppressed in Markdown to deliver uninterrupted content in reading order. Tables are inserted in reading order. The paragraph in '5. Experiments' wrapping over the column end is broken up in two and interrupted by the table.\nKDD '22, August 14-18, 2022, Washington, DC, USA\nBirgit Pfitzmann, Christoph Auer, Michele Dolfi, Ahmed S. Nassar, and Peter Staar\nTable 1: DocLayNet dataset overview. Along with the frequency of each class label, we present the relative occurrence (as %\nbetween pairwise annotations from the triple-annotated pages, from which we obtain accuracy ranges.\nof row 'Total') in the train, test and validation sets. The inter-annotator agreement is computed as the mAP@0.5-0.95 metric",
+        "text": "This is not entirely surprising, as Text , Table and Picture are abundant and the most visually distinctive in a document.\ncoioct dcochon modols\nmak enbrel\nFigure 3: Page 6 of the DocLayNet paper. If recognized, metadata such as authors are appearing first under the title. Elements recognized as page headers or footers are suppressed in Markdown to deliver uninterrupted content in reading order. Tables are inserted in reading order. The paragraph in '5. Experiments' wrapping over the column end is broken up in two and interrupted by the table.\nKDD '22, August 14-18, 2022, Washington, DC, USA\nBirgit Pfitzmann, Christoph Auer, Michele Dolfi, Ahmed S. Nassar, and Peter Staar\nTable 1: DocLayNet dataset overview. Along with the frequency of each class label, we present the relative occurrence (as %\nbetween pairwise annotations from the triple-annotated pages, from which we obtain accuracy ranges.",
         "meta": {
             "doc_items": [
                 "#/texts/523",
@@ -725,7 +725,18 @@
                 "#/texts/529",
                 "#/texts/530",
                 "#/texts/531",
-                "#/texts/532",
+                "#/texts/532"
+            ],
+            "headings": [
+                "Docling Technical Report",
+                "Baselines for Object Detection"
+            ]
+        }
+    },
+    {
+        "text": "of row 'Total') in the train, test and validation sets. The inter-annotator agreement is computed as the mAP@0.5-0.95 metric",
+        "meta": {
+            "doc_items": [
                 "#/texts/533"
             ],
             "headings": [
@@ -735,7 +746,7 @@
         }
     },
     {
-        "text": "The image consists of a blue circle with the letter \"A\" written in white color. The circle is placed on a white background, which makes the letter \"A\" stand out prominently. The background is a gradient of blue and white, transitioning from a lighter shade at the top to a darker shade at the bottom. The gradient effect gives a sense of depth and movement, making the letter \"A\" stand out more.\n\n### Description of Objects in the Image:\n1. **Circle**: The central element of the image is a blue circle.\n2. **White Letter \"A\"**: The letter \"A\" is written in white color.\n3. **Background**: The background is a gradient of blue and white, transitioning from a lighter shade at the top to a darker shade at the bottom.\n4. **Color Gradient**: The gradient effect is present, with the color transitioning from a lighter shade at the top to a darker shade at the bottom.\n\n<!-- image -->",
+        "text": "<!-- image -->\n\nThe image consists of a blue circle with the letter \"A\" written in white color. The circle is placed on a white background, which makes the letter \"A\" stand out prominently. The background is a gradient of blue and white, transitioning from a lighter shade at the top to a darker shade at the bottom. The gradient effect gives a sense of depth and movement, making the letter \"A\" stand out more.\n\n### Description of Objects in the Image:\n1. **Circle**: The central element of the image is a blue circle.\n2. **White Letter \"A\"**: The letter \"A\" is written in white color.\n3. **Background**: The background is a gradient of blue and white, transitioning from a lighter shade at the top to a darker shade at the bottom.\n4. **Color Gradient**: The gradient effect is present, with the color transitioning from a lighter shade at the top to a darker shade at the bottom.",
         "meta": {
             "doc_items": [
                 "#/pictures/8"
@@ -747,7 +758,7 @@
         }
     },
     {
-        "text": "In this image, there is a table with two columns. The first column is labeled \"Class label,\" and the second column is labeled \"Count.\" The first row in the table has the label \"Class label,\" and the count is 22524. The second row in the table has the label \"Count,\" and the count is 204.\n\n<!-- image -->",
+        "text": "<!-- image -->\n\nIn this image, there is a table with two columns. The first column is labeled \"Class label,\" and the second column is labeled \"Count.\" The first row in the table has the label \"Class label,\" and the count is 22524. The second row in the table has the label \"Count,\" and the count is 204.",
         "meta": {
             "doc_items": [
                 "#/pictures/9"
@@ -759,7 +770,7 @@
         }
     },
     {
-        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || class label | Count | Train | Test | Val | All | Fin | Man | Sci | Law | Pat | Ten || Caption | 22524 | 2.04 | 1.77 | 2.32 | 84-89 | 40-61 | 86-92 | 94-99 | 95-99 | 69-78 | n/a |",
+        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| class label | Count | Train | Test | Val | All | Fin | Man | Sci | Law | Pat | Ten |\n| Caption | 22524 | 2.04 | 1.77 | 2.32 | 84-89 | 40-61 | 86-92 | 94-99 | 95-99 | 69-78 | n/a |\n",
         "meta": {
             "doc_items": [
                 "#/tables/3"
@@ -771,7 +782,7 @@
         }
     },
     {
-        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || Footnote | 6318 | 0.60 | 0.31 | 0.58 | 83-91 | n/a | 100 | 62-88 | 85-94 | n/a | 82-97 |",
+        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| Footnote | 6318 | 0.60 | 0.31 | 0.58 | 83-91 | n/a | 100 | 62-88 | 85-94 | n/a | 82-97 |\n",
         "meta": {
             "doc_items": [
                 "#/tables/3"
@@ -783,7 +794,7 @@
         }
     },
     {
-        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || Formula | 25027 | 2.25 | 1.90 | 2.96 | 83-85 | n/a | n/a | 84-87 | 86-96 | n/a | n/a |",
+        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| Formula | 25027 | 2.25 | 1.90 | 2.96 | 83-85 | n/a | n/a | 84-87 | 86-96 | n/a | n/a |\n",
         "meta": {
             "doc_items": [
                 "#/tables/3"
@@ -795,7 +806,7 @@
         }
     },
     {
-        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || List-item | 185660 | 17.19 | 13.34 | 15.82 | 87-88 | 74-83 | 90-92 | 97-97 | 81-85 | 75-88 | 93-95 |",
+        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| List-item | 185660 | 17.19 | 13.34 | 15.82 | 87-88 | 74-83 | 90-92 | 97-97 | 81-85 | 75-88 | 93-95 |\n",
         "meta": {
             "doc_items": [
                 "#/tables/3"
@@ -807,7 +818,7 @@
         }
     },
     {
-        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || Page-footer | 70878 | 6.51 | 5.58 | 6.00 | 93-94 | 88-90 | 95-96 | 100 | 92-97 | 100 | 96-98 |",
+        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| Page-footer | 70878 | 6.51 | 5.58 | 6.00 | 93-94 | 88-90 | 95-96 | 100 | 92-97 | 100 | 96-98 |\n",
         "meta": {
             "doc_items": [
                 "#/tables/3"
@@ -819,7 +830,7 @@
         }
     },
     {
-        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || Page-header | 58022 | 5.10 | 6.70 | 5.06 | 85-89 | 66-76 | 90-94 | 98-100 | 91-92 | 97-99 | 81-86 |",
+        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| Page-header | 58022 | 5.10 | 6.70 | 5.06 | 85-89 | 66-76 | 90-94 | 98-100 | 91-92 | 97-99 | 81-86 |\n",
         "meta": {
             "doc_items": [
                 "#/tables/3"
@@ -831,7 +842,7 @@
         }
     },
     {
-        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || Picture | 45976 | 4.21 | 2.78 | 5.31 | 69-71 | 56-59 | 82-86 | 69-82 | 80-95 | 66-71 | 59-76 |",
+        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| Picture | 45976 | 4.21 | 2.78 | 5.31 | 69-71 | 56-59 | 82-86 | 69-82 | 80-95 | 66-71 | 59-76 |\n",
         "meta": {
             "doc_items": [
                 "#/tables/3"
@@ -843,7 +854,7 @@
         }
     },
     {
-        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || Section-header | 142884 | 12.60 | 15.77 | 12.85 | 83-84 | 76-81 | 90-92 | 94-95 | 87-94 | 69-73 | 78-86 |",
+        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| Section-header | 142884 | 12.60 | 15.77 | 12.85 | 83-84 | 76-81 | 90-92 | 94-95 | 87-94 | 69-73 | 78-86 |\n",
         "meta": {
             "doc_items": [
                 "#/tables/3"
@@ -855,7 +866,7 @@
         }
     },
     {
-        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || Table | 34733 | 3.20 | 2.27 | 3.60 | 77-81 | 75-80 | 83-86 | 98-99 | 58-80 | 79-84 | 70-85 |",
+        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| Table | 34733 | 3.20 | 2.27 | 3.60 | 77-81 | 75-80 | 83-86 | 98-99 | 58-80 | 79-84 | 70-85 |\n",
         "meta": {
             "doc_items": [
                 "#/tables/3"
@@ -867,7 +878,7 @@
         }
     },
     {
-        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || Text | 510377 | 45.82 | 49.28 | 45.00 | 84-86 | 81-86 | 88-93 | 89-93 | 87-92 | 71-79 | 87-95 |",
+        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| Text | 510377 | 45.82 | 49.28 | 45.00 | 84-86 | 81-86 | 88-93 | 89-93 | 87-92 | 71-79 | 87-95 |\n",
         "meta": {
             "doc_items": [
                 "#/tables/3"
@@ -879,7 +890,7 @@
         }
     },
     {
-        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || Title | 5071 | 0.47 | 0.30 | 0.50 | 60-72 | 24-63 | 50-63 | 94-100 | 82-96 | 68-79 | 24-56 |",
+        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| Title | 5071 | 0.47 | 0.30 | 0.50 | 60-72 | 24-63 | 50-63 | 94-100 | 82-96 | 68-79 | 24-56 |\n",
         "meta": {
             "doc_items": [
                 "#/tables/3"
@@ -891,7 +902,7 @@
         }
     },
     {
-        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || Total | 1107470 | 941123 | 99816 | 66531 | 82-83 | 71-74 | 79-81 | 89-94 | 86-91 | 71-76 | 68-85 |",
+        "text": "| class label | Count | % of Total | % of Total | % of Total | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) | triple inter-annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| Total | 1107470 | 941123 | 99816 | 66531 | 82-83 | 71-74 | 79-81 | 89-94 | 86-91 | 71-76 | 68-85 |",
         "meta": {
             "doc_items": [
                 "#/tables/3"
@@ -903,7 +914,7 @@
         }
     },
     {
-        "text": "In this image I can see a blue circle.\n\n<!-- image -->\ninclude publication repositories such as arXiv\nTable 1: DocLayNet dataset overview. Along with the frequency of each class label, we present the relative occurrence (as % of row \"Total\") in the train, test and validation sets. The inter-annotator agreement is computed as the mAP@0.5-0.95 metric between pairwise annotations from the triple-\nannotated pages, from which we obtain accuracy ranges.\nA table with different columns and rows.\n\n<!-- image -->",
+        "text": "<!-- image -->\n\nIn this image I can see a blue circle.\ninclude publication repositories such as arXiv\nTable 1: DocLayNet dataset overview. Along with the frequency of each class label, we present the relative occurrence (as % of row \"Total\") in the train, test and validation sets. The inter-annotator agreement is computed as the mAP@0.5-0.95 metric between pairwise annotations from the triple-\nannotated pages, from which we obtain accuracy ranges.\n<!-- image -->\n\nA table with different columns and rows.",
         "meta": {
             "doc_items": [
                 "#/pictures/10",
@@ -919,7 +930,7 @@
         }
     },
     {
-        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || class label | Count | Train | Test | Val | All | Fin | Man | Sci | Law | Pat | Ten || Caption | 22524 | 2.04 | 1.77 | 2.32 | 84-89 | 40-61 | 86-92 | 94-99 | 95-99 | 69-78 | n/a |",
+        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| class label | Count | Train | Test | Val | All | Fin | Man | Sci | Law | Pat | Ten |\n| Caption | 22524 | 2.04 | 1.77 | 2.32 | 84-89 | 40-61 | 86-92 | 94-99 | 95-99 | 69-78 | n/a |\n",
         "meta": {
             "doc_items": [
                 "#/tables/4"
@@ -931,7 +942,7 @@
         }
     },
     {
-        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || Footnote | 6318 | 0.60 | 0.31 | 0.58 | 83-91 | n/a | 100 | 62-88 | 85-94 | n/a | 82-97 |",
+        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| Footnote | 6318 | 0.60 | 0.31 | 0.58 | 83-91 | n/a | 100 | 62-88 | 85-94 | n/a | 82-97 |\n",
         "meta": {
             "doc_items": [
                 "#/tables/4"
@@ -943,7 +954,7 @@
         }
     },
     {
-        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || Formula | 25027 | 2.25 | 1.90 | 2.96 | 83-85 | n/a | n/a | 84-87 | 86-96 | n/a | n/a |",
+        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| Formula | 25027 | 2.25 | 1.90 | 2.96 | 83-85 | n/a | n/a | 84-87 | 86-96 | n/a | n/a |\n",
         "meta": {
             "doc_items": [
                 "#/tables/4"
@@ -955,7 +966,7 @@
         }
     },
     {
-        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || List-item | 185660 | 17.19 | 13.34 | 15.82 | 87-88 | 74-83 | 90-92 | 97-97 | 81-85 | 75-88 | 93-95 |",
+        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| List-item | 185660 | 17.19 | 13.34 | 15.82 | 87-88 | 74-83 | 90-92 | 97-97 | 81-85 | 75-88 | 93-95 |\n",
         "meta": {
             "doc_items": [
                 "#/tables/4"
@@ -967,7 +978,7 @@
         }
     },
     {
-        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || Page- footer | 70878 | 6.51 | 5.58 | 6.00 | 93-94 | 88-90 | 95-96 | 100 | 92-97 | 100 | 96-98 |",
+        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| Page- footer | 70878 | 6.51 | 5.58 | 6.00 | 93-94 | 88-90 | 95-96 | 100 | 92-97 | 100 | 96-98 |\n",
         "meta": {
             "doc_items": [
                 "#/tables/4"
@@ -979,7 +990,7 @@
         }
     },
     {
-        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || Page- header | 58022 | 5.10 | 6.70 | 5.06 | 85-89 | 66-76 | 90-94 | 98-100 | 91-92 | 97-99 | 81-86 |",
+        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| Page- header | 58022 | 5.10 | 6.70 | 5.06 | 85-89 | 66-76 | 90-94 | 98-100 | 91-92 | 97-99 | 81-86 |\n",
         "meta": {
             "doc_items": [
                 "#/tables/4"
@@ -991,7 +1002,7 @@
         }
     },
     {
-        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || Picture | 45976 | 4.21 | 2.78 | 5.31 | 69-71 | 56-59 | 82-86 | 69-82 | 80-95 | 66-71 | 59-76 |",
+        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| Picture | 45976 | 4.21 | 2.78 | 5.31 | 69-71 | 56-59 | 82-86 | 69-82 | 80-95 | 66-71 | 59-76 |\n",
         "meta": {
             "doc_items": [
                 "#/tables/4"
@@ -1003,7 +1014,7 @@
         }
     },
     {
-        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || Section- header | 142884 | 12.60 | 15.77 | 12.85 | 83-84 | 76-81 | 90-92 | 94-95 | 87-94 | 69-73 | 78-86 |",
+        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| Section- header | 142884 | 12.60 | 15.77 | 12.85 | 83-84 | 76-81 | 90-92 | 94-95 | 87-94 | 69-73 | 78-86 |\n",
         "meta": {
             "doc_items": [
                 "#/tables/4"
@@ -1015,7 +1026,7 @@
         }
     },
     {
-        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || Table | 34733 | 3.20 | 2.27 | 3.60 | 77-81 | 75-80 | 83-86 | 98-99 | 58-80 | 79-84 | 70-85 |",
+        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| Table | 34733 | 3.20 | 2.27 | 3.60 | 77-81 | 75-80 | 83-86 | 98-99 | 58-80 | 79-84 | 70-85 |\n",
         "meta": {
             "doc_items": [
                 "#/tables/4"
@@ -1027,7 +1038,7 @@
         }
     },
     {
-        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || Text | 510377 | 45.82 | 49.28 | 45.00 | 84-86 | 81-86 | 88-93 | 89-93 | 87-92 | 71-79 | 87-95 |",
+        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| Text | 510377 | 45.82 | 49.28 | 45.00 | 84-86 | 81-86 | 88-93 | 89-93 | 87-92 | 71-79 | 87-95 |\n",
         "meta": {
             "doc_items": [
                 "#/tables/4"
@@ -1039,7 +1050,7 @@
         }
     },
     {
-        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || Title | 5071 | 0.47 | 0.30 | 0.50 | 60-72 | 24-63 | 50-63 | 94-100 | 82-96 | 68-79 | 24-56 |",
+        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| Title | 5071 | 0.47 | 0.30 | 0.50 | 60-72 | 24-63 | 50-63 | 94-100 | 82-96 | 68-79 | 24-56 |\n",
         "meta": {
             "doc_items": [
                 "#/tables/4"
@@ -1051,7 +1062,7 @@
         }
     },
     {
-        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - || Total | 1107470 | 941123 | 99816 | 66531 | 82-83 | 71-74 | 79-81 | 89-94 | 86-91 | 71-76 | 68-85 |\n3\n,\ngovernment offices,\nWe reviewed the col-\n,\nPage-\nTitle and\n.",
+        "text": "|  |  | % of Total | % of Total | % of Total | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) | triple inter- annotator mAP @ 0.5-0.95 (%) |\n| - | - | - | - | - | - | - | - | - | - | - | - |\n| Total | 1107470 | 941123 | 99816 | 66531 | 82-83 | 71-74 | 79-81 | 89-94 | 86-91 | 71-76 | 68-85 |\n3\n,\ngovernment offices,\nWe reviewed the col-\n,\nPage-\nTitle and\n.",
         "meta": {
             "doc_items": [
                 "#/tables/4",
@@ -1071,7 +1082,7 @@
         }
     },
     {
-        "text": "page. Specificity ensures that the choice of label is not ambiguous,\nIn this image there is a table with some text on it.\n\n<!-- image -->\nwe distributed the annotation workload and performed continuous be annotated. We refrained from class labels that are very specific\nonly. For phases three and four, a group of 40 dedicated annotators while coverage ensures that all meaningful items on a page can\nquality controls. Phase one and two required a small team of experts to a document category, such as\nAbstract in the\nScientific Articles were assembled and supervised.\ncategory. We also avoided class labels that are tightly linked to the\nPhase 1: Data selection and preparation.\nOur inclusion cri-\nAuthor\nAffiliation",
+        "text": "page. Specificity ensures that the choice of label is not ambiguous,\n<!-- image -->\n\nIn this image there is a table with some text on it.\nwe distributed the annotation workload and performed continuous be annotated. We refrained from class labels that are very specific\nonly. For phases three and four, a group of 40 dedicated annotators while coverage ensures that all meaningful items on a page can\nquality controls. Phase one and two required a small team of experts to a document category, such as\nAbstract in the\nScientific Articles were assembled and supervised.\ncategory. We also avoided class labels that are tightly linked to the\nPhase 1: Data selection and preparation.\nOur inclusion cri-\nAuthor\nAffiliation",
         "meta": {
             "doc_items": [
                 "#/texts/914",

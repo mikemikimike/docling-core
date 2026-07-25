@@ -1,14 +1,15 @@
 """Define classes for Markdown serialization."""
 
 import html
+import logging
 import re
 import textwrap
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Any, Literal, Optional, Union
+from typing import Annotated, Any, Optional, Union
 
 from pydantic import AnyUrl, BaseModel, Field, PositiveInt
-from tabulate import tabulate
+from tabulate import _column_type, tabulate
 from typing_extensions import override
 
 from docling_core.transforms.serializer.base import (
@@ -32,8 +33,7 @@ from docling_core.transforms.serializer.common import (
     _should_use_legacy_annotations,
     create_ser_result,
 )
-from docling_core.types.doc.base import ImageRefMode
-from docling_core.types.doc.document import (
+from docling_core.types.doc import (
     BaseMeta,
     CodeItem,
     ContentLayer,
@@ -48,8 +48,10 @@ from docling_core.types.doc.document import (
     FormulaItem,
     GroupItem,
     ImageRef,
+    ImageRefMode,
     InlineGroup,
     KeyValueItem,
+    KeywordsMetaField,
     ListGroup,
     ListItem,
     MoleculeMetaField,
@@ -66,7 +68,10 @@ from docling_core.types.doc.document import (
     TabularChartMetaField,
     TextItem,
     TitleItem,
+    TopicsMetaField,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 def _cell_content_has_table(item: NodeItem, doc: DoclingDocument) -> bool:
@@ -191,10 +196,30 @@ class MarkdownTextSerializer(BaseModel, BaseTextSerializer):
         doc_serializer: BaseDocSerializer,
         doc: DoclingDocument,
         is_inline_scope: bool = False,
+        in_table_cell: bool = False,
         visited: Optional[set[str]] = None,  # refs of visited items
         **kwargs: Any,
     ) -> SerializationResult:
-        """Serializes the passed item."""
+        """Serialize the passed text item to Markdown.
+
+        Args:
+            item: The text item to serialize.
+            doc_serializer: The parent document serializer.
+            doc: The document the item belongs to.
+            is_inline_scope: Whether serialization happens in an inline context
+                (e.g. inside an InlineGroup). Affects delimiter and code/formula
+                wrapping.
+            in_table_cell: Whether the item is being rendered inside a table
+                cell. When ``True``, heading markers are suppressed because the
+                Markdown spec does not allow headings inside tables.
+            visited: Set of already-visited item refs used to prevent duplicate
+                serialization.
+            **kwargs: Additional keyword arguments forwarded to
+                ``MarkdownParams``.
+
+        Returns:
+            The serialization result containing the rendered Markdown text.
+        """
         my_visited = visited if visited is not None else set()
         params = MarkdownParams(**kwargs)
         res_parts: list[SerializationResult] = []
@@ -242,20 +267,22 @@ class MarkdownTextSerializer(BaseModel, BaseTextSerializer):
 
                 # wrap with outer marker (if applicable)
                 if params.ensure_valid_list_item_marker and not case_already_valid:
-                    assert item.parent
-                    list_group = item.parent.resolve(doc)
-                    assert isinstance(list_group, ListGroup)
-                    if list_group.first_item_is_enumerated(doc) and (
-                        params.orig_list_item_marker_mode != OrigListItemMarkerMode.AUTO or not item.marker
-                    ):
-                        pos = -1
-                        for i, child in enumerate(list_group.children):
-                            if child.resolve(doc) == item:
-                                pos = i
-                                break
-                        md_marker = f"{pos + 1}."
+                    md_marker = "-"
+                    if item.parent is None:
+                        _logger.warning(f"ListItem {item} must have a parent")
                     else:
-                        md_marker = "-"
+                        list_group = item.parent.resolve(doc)
+                        if not isinstance(list_group, ListGroup):
+                            _logger.warning(f"Expected ListGroup, got {type(list_group)}")
+                        elif list_group.first_item_is_enumerated(doc) and (
+                            params.orig_list_item_marker_mode != OrigListItemMarkerMode.AUTO or not item.marker
+                        ):
+                            pos = -1
+                            for i, child in enumerate(list_group.children):
+                                if child.resolve(doc) == item:
+                                    pos = i
+                                    break
+                            md_marker = f"{pos + 1}."
                     pieces.append(md_marker)
 
                 # include original marker (if applicable)
@@ -269,7 +296,7 @@ class MarkdownTextSerializer(BaseModel, BaseTextSerializer):
                 pieces.append(text)
                 text_part = " ".join(pieces)
             else:
-                text_part = self._format_heading(text, item)
+                text_part = self._format_heading(text, item, in_table_cell=in_table_cell)
         elif isinstance(item, CodeItem):
             if params.format_code_blocks:
                 # inline items and all hyperlinks: use single backticks
@@ -318,8 +345,25 @@ class MarkdownTextSerializer(BaseModel, BaseTextSerializer):
         self,
         text: str,
         item: Union[TitleItem, SectionHeaderItem],
+        in_table_cell: bool = False,
     ) -> str:
-        """Format a heading/title item. Override to customize heading representation."""
+        """Format a heading or title item as a Markdown heading string.
+
+        Override this method to customize heading representation in subclasses.
+
+        Args:
+            text: The heading text content, already post-processed.
+            item: The title or section header item being formatted.
+            in_table_cell: When ``True``, returns plain text without ``#``
+                markers because headings are not valid inside Markdown tables
+                per the Markdown spec.
+
+        Returns:
+            The formatted heading string, e.g. ``"## My heading"`` for a
+            level-1 section header, or plain ``text`` when inside a table cell.
+        """
+        if in_table_cell:
+            return text
         num_hashes = 1 if isinstance(item, TitleItem) else item.level + 1
         return f"{num_hashes * '#'} {text}"
 
@@ -359,6 +403,8 @@ class MarkdownMetaSerializer(BaseModel, BaseMetaSerializer):
         if (field_val := getattr(meta, name)) is not None:
             if isinstance(field_val, SummaryMetaField):
                 txt = field_val.text
+            elif isinstance(field_val, KeywordsMetaField | TopicsMetaField):
+                txt = ", ".join(field_val.values)
             elif isinstance(field_val, DescriptionMetaField):
                 txt = field_val.text
             elif isinstance(field_val, PictureClassificationMetaField):
@@ -421,6 +467,9 @@ class MarkdownAnnotationSerializer(BaseModel, BaseAnnotationSerializer):
 class MarkdownTableSerializer(BaseTableSerializer):
     """Markdown-specific table item serializer."""
 
+    _SEPARATOR_ROW_RE: re.Pattern = re.compile(r"^\|(\s*:?-+:?\s*\|)+\s*$")
+    """Matches a Markdown table separator row, e.g. ``| - | :---: | --: |``."""
+
     @override
     def get_header_and_body_lines(
         self,
@@ -428,26 +477,30 @@ class MarkdownTableSerializer(BaseTableSerializer):
         table_text: str,
         **kwargs: Any,
     ) -> tuple[list[str], list[str]]:
-        """Get header lines and body lines from the markdown table.
+        """Split a serialized Markdown table into header and body lines.
+
+        Locates the separator row (``| - | - |``) to identify the boundary
+        between preamble, header, and body.  Any content before the header row
+        — including captions that themselves start with ``|`` — is treated as
+        preamble and excluded from the returned header lines.
+        Returns ``([], all_lines)`` when no separator row can be found or the
+        separator is on the first line (no header row above it).
+
+        Args:
+            table_text: A serialized Markdown table, possibly preceded by a
+                caption or blank lines.
 
         Returns:
-            A tuple of (header_lines, body_lines) where header_lines contains
-            the header row and separator row, and body_lines contains the data rows.
+            A tuple ``(header_lines, body_lines)`` where ``header_lines`` holds
+            the header row and its separator row, and ``body_lines`` holds the
+            remaining data rows.
         """
-
-        lines = [line for line in table_text.split("\n") if line.strip()]
-
-        if len(lines) < 2:
-            # Not enough lines for a proper markdown table (need at least header + separator)
-            return [], lines
-
-        # In markdown tables:
-        # Line 0: Header row
-        # Line 1: Separator row (with dashes)
-        # Lines 2+: Body rows
-        header_lines = lines[:2]
-        body_lines = lines[2:]
-
+        all_lines = table_text.splitlines(True)
+        sep_idx = next((i for i, l in enumerate(all_lines) if self._SEPARATOR_ROW_RE.match(l.rstrip("\n"))), None)
+        if sep_idx is None or sep_idx == 0:
+            return [], all_lines
+        header_lines = all_lines[sep_idx - 1 : sep_idx + 1]
+        body_lines = all_lines[sep_idx + 1 :]
         return header_lines, body_lines
 
     @staticmethod
@@ -532,7 +585,7 @@ class MarkdownTableSerializer(BaseTableSerializer):
                 for col in row:
                     if isinstance(col, RichTableCell):
                         ref_item = col.ref.resolve(doc=doc)
-                        inner_kwargs = {**kwargs, "_nested_in_table": True}
+                        inner_kwargs = {**kwargs, "_nested_in_table": True, "in_table_cell": True}
                         cell_text = doc_serializer.serialize(
                             item=ref_item,
                             **inner_kwargs,
@@ -544,15 +597,22 @@ class MarkdownTableSerializer(BaseTableSerializer):
                     rendered_row.append(cell_text.replace("\n", " ").replace("|", "&#124;"))
                 rows.append(rendered_row)
             if len(rows) > 0:
-                try:
-                    table_text = tabulate(rows[1:], headers=rows[0], tablefmt="github")
-                except ValueError:
-                    table_text = tabulate(
-                        rows[1:],
-                        headers=rows[0],
-                        tablefmt="github",
-                        disable_numparse=True,
-                    )
+                # Always disable numparse to prevent silent precision loss in numeric values
+                # Use tabulate's _column_type to detect numeric columns for right-alignment
+                colalign = []
+                if len(rows) > 1:  # Need at least header + 1 data row
+                    num_cols = len(rows[0])
+                    for col_idx in range(num_cols):
+                        col_values = [row[col_idx] if col_idx < len(row) else "" for row in rows[1:]]
+                        col_type = _column_type(col_values)
+                        colalign.append("right" if col_type in (int, float) else "left")
+                table_text = tabulate(
+                    rows[1:],
+                    headers=rows[0],
+                    tablefmt="github",
+                    disable_numparse=True,
+                    colalign=tuple(colalign) if colalign else None,
+                )
 
                 if params.compact_tables:
                     table_text = self._compact_table(table_text)

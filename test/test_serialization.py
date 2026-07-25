@@ -2,14 +2,18 @@
 
 import threading
 from pathlib import Path
+from unittest.mock import MagicMock, patch
+from xml.etree import ElementTree as ET
 
 import pytest
 
 from docling_core.transforms.serializer.common import _DEFAULT_LABELS
 from docling_core.transforms.serializer.html import (
     HTMLDocSerializer,
+    HTMLMetaSerializer,
     HTMLOutputStyle,
     HTMLParams,
+    HTMLTableSerializer,
 )
 from docling_core.transforms.serializer.markdown import (
     MarkdownDocSerializer,
@@ -20,12 +24,21 @@ from docling_core.transforms.serializer.markdown import (
 )
 from docling_core.transforms.serializer.webvtt import WebVTTDocSerializer, WebVTTParams
 from docling_core.transforms.visualizer.layout_visualizer import LayoutVisualizer
+from docling_core.types.doc import DoclingDocument
 from docling_core.types.doc.base import ImageRefMode
 from docling_core.types.doc.document import (
+    BaseMeta,
+    CharSpan,
     DescriptionAnnotation,
-    DoclingDocument,
+    EntitiesMetaField,
+    EntityMention,
+    LanguageMetaField,
+    PictureClassificationMetaField,
+    PictureClassificationPrediction,
+    PictureMeta,
     RefItem,
     RichTableCell,
+    SummaryMetaField,
     TableCell,
     TableData,
     TextItem,
@@ -357,6 +370,68 @@ def test_md_pipe_in_table():
     assert ser == "| Fruits &#124; Veggies   |\n|-------------------------|"
 
 
+def test_md_heading_in_rich_table_cell_renders_as_plain_text():
+    """Test headings inside RichTableCell must not emit `#` markers.
+
+    According to the Markdown spec, heading syntax is invalid inside tables.
+    A SectionHeaderItem or TitleItem referenced by a RichTableCell must be
+    serialized as plain text, not as `## Heading`.
+    """
+    doc = DoclingDocument(name="heading_in_table")
+    table = doc.add_table(data=TableData(num_rows=2, num_cols=2))
+
+    section_header = doc.add_heading(text="Section Heading", level=1, parent=table)
+    title = doc.add_title(text="Document Title", parent=table)
+
+    doc.add_table_cell(
+        table,
+        RichTableCell(
+            start_row_offset_idx=0,
+            end_row_offset_idx=1,
+            start_col_offset_idx=0,
+            end_col_offset_idx=1,
+            ref=section_header.get_ref(),
+        ),
+    )
+    doc.add_table_cell(
+        table,
+        RichTableCell(
+            start_row_offset_idx=0,
+            end_row_offset_idx=1,
+            start_col_offset_idx=1,
+            end_col_offset_idx=2,
+            ref=title.get_ref(),
+        ),
+    )
+    doc.add_table_cell(
+        table,
+        TableCell(
+            start_row_offset_idx=1,
+            end_row_offset_idx=2,
+            start_col_offset_idx=0,
+            end_col_offset_idx=1,
+            text="value A",
+        ),
+    )
+    doc.add_table_cell(
+        table,
+        TableCell(
+            start_row_offset_idx=1,
+            end_row_offset_idx=2,
+            start_col_offset_idx=1,
+            end_col_offset_idx=2,
+            text="value B",
+        ),
+    )
+
+    md = doc.export_to_markdown()
+    assert "Section Heading" in md
+    assert "Document Title" in md
+    table_lines = [line for line in md.splitlines() if line.startswith("|")]
+    for line in table_lines:
+        assert "#" not in line, f"Heading marker leaked into table cell: {line!r}\nFull output:\n{md}"
+
+
 def test_cell_content_has_table_detects_descendant_table():
     """Ensure nested tables are detected through non-table parent nodes."""
     doc = DoclingDocument(name="descendant_table")
@@ -457,7 +532,6 @@ def test_md_nested_rich_table_no_hang():
 
 def test_md_compact_table():
     """Test compact table format removes padding and uses minimal separators."""
-
     # Test the _compact_table method directly
     padded_table = """| item   | qty   | description           |
 | ------ | ----: | :-------------------: |
@@ -478,9 +552,77 @@ def test_md_compact_table():
     assert len(compact_result) < len(padded_table)
 
 
+def test_md_numeric_precision_preserved():
+    """Test that numeric values in tables preserve their full precision.
+
+    Regression test for issue where tabulate's numparse would silently
+    truncate numeric strings to ~6 significant figures.
+    """
+    doc = DoclingDocument(name="Numeric Precision Test")
+    precise_values = [
+        "225.8183",
+        "24797.34",
+        "20896.7184",
+        "17358.138",
+        "123.456789",
+    ]
+    table = doc.add_table(data=TableData(num_rows=len(precise_values) + 1, num_cols=2))
+
+    # Add header row
+    doc.add_table_cell(
+        table_item=table,
+        cell=TableCell(
+            start_row_offset_idx=0,
+            end_row_offset_idx=1,
+            start_col_offset_idx=0,
+            end_col_offset_idx=1,
+            text="Description",
+        ),
+    )
+    doc.add_table_cell(
+        table_item=table,
+        cell=TableCell(
+            start_row_offset_idx=0,
+            end_row_offset_idx=1,
+            start_col_offset_idx=1,
+            end_col_offset_idx=2,
+            text="Value",
+        ),
+    )
+
+    # Add data rows with precise numeric values
+    for row_idx, value in enumerate(precise_values, start=1):
+        doc.add_table_cell(
+            table_item=table,
+            cell=TableCell(
+                start_row_offset_idx=row_idx,
+                end_row_offset_idx=row_idx + 1,
+                start_col_offset_idx=0,
+                end_col_offset_idx=1,
+                text=f"Item {row_idx}",
+            ),
+        )
+        doc.add_table_cell(
+            table_item=table,
+            cell=TableCell(
+                start_row_offset_idx=row_idx,
+                end_row_offset_idx=row_idx + 1,
+                start_col_offset_idx=1,
+                end_col_offset_idx=2,
+                text=value,
+            ),
+        )
+
+    markdown_output = doc.export_to_markdown()
+    for value in precise_values:
+        assert value in markdown_output, (
+            f"Numeric value '{value}' was not preserved in markdown output. "
+            "This indicates precision loss during table serialization."
+        )
+
+
 def test_md_traverse_pictures():
     """Test traverse_pictures parameter to include text inside PictureItems."""
-
     doc = DoclingDocument(name="Test Document")
     doc.add_text(label=DocItemLabel.PARAGRAPH, text="Text before picture")
     picture = doc.add_picture()
@@ -535,6 +677,103 @@ def test_md_traverse_pictures():
 # ===============================
 # HTML tests
 # ===============================
+
+
+def test_html_table_serializer_get_header_and_body_lines():
+    """Test HTMLTableSerializer.get_header_and_body_lines() method."""
+    serializer = HTMLTableSerializer()
+
+    # Test 1: Valid HTML with headers and data
+    valid_html = "<table><tr><th>Header1</th><th>Header2</th></tr><tr><td>Data1</td><td>Data2</td></tr></table>"
+    headers, body = serializer.get_header_and_body_lines(table_text=valid_html)
+    assert len(headers) > 0, "Should have headers"
+    assert len(body) > 0, "Should have body rows"
+
+    # Test 2: Row without closing </tr> tag
+    # Parser will find the row, but when we search for </tr> it won't be found
+    no_close_tr = "<tr><th>Header</th></tr><tr><td>Data1"
+    headers, body = serializer.get_header_and_body_lines(table_text=no_close_tr)
+    assert isinstance(headers, list)
+    assert isinstance(body, list)
+
+    # Test 3: Data rows with incomplete closing tags
+    # When collecting remaining rows, some </tr> tags are missing
+    incomplete_data = "<tr><th>H1</th></tr><tr><td>D1</td></tr><tr><td>D2"
+    headers, body = serializer.get_header_and_body_lines(table_text=incomplete_data)
+    assert isinstance(headers, list)
+    assert isinstance(body, list)
+
+    # Test 4: Force exception in parser
+    with patch("docling_core.transforms.serializer.html._SimpleHTMLTableParser") as mock_parser_class:
+        mock_parser = MagicMock()
+        mock_parser.feed.side_effect = Exception("Parser error")
+        mock_parser_class.return_value = mock_parser
+
+        broken_html = "<tr><th>Header</th></tr><tr><td>Data</td></tr>"
+        headers, body = serializer.get_header_and_body_lines(table_text=broken_html)
+        # Should use fallback logic
+        assert isinstance(headers, list)
+        assert isinstance(body, list)
+
+    # Test 5: Parser returns more rows than exist in HTML
+    # Mock parser to return extra rows that don't exist in the HTML
+    with patch("docling_core.transforms.serializer.html._SimpleHTMLTableParser") as mock_parser_class:
+        mock_parser = MagicMock()
+        # Create fake row data - more rows than actually exist in HTML
+        mock_parser.rows = [
+            {"th_cells": ["H1"], "td_cells": []},
+            {"th_cells": ["H2"], "td_cells": []},
+            {"th_cells": ["H3"], "td_cells": []},  # This row doesn't exist in HTML
+            {"th_cells": [], "td_cells": ["D1"]},
+        ]
+        mock_parser_class.return_value = mock_parser
+
+        # HTML with only 2 rows, but parser claims 4
+        limited_html = "<tr><th>H1</th></tr><tr><th>H2</th></tr>"
+        headers, body = serializer.get_header_and_body_lines(table_text=limited_html)
+        assert isinstance(headers, list)
+        assert isinstance(body, list)
+
+    # Test 6: Specific case for line 485 - row_start found but row_end not found
+    # Create HTML where parser finds a row, but the actual HTML has <tr without </tr>
+    with patch("docling_core.transforms.serializer.html._SimpleHTMLTableParser") as mock_parser_class:
+        mock_parser = MagicMock()
+        # Parser reports a header row exists
+        mock_parser.rows = [
+            {"th_cells": ["Header"], "td_cells": []},
+        ]
+        mock_parser_class.return_value = mock_parser
+
+        # But the HTML has <tr without matching </tr>
+        html_no_close = "<tr><th>Header"
+        headers, body = serializer.get_header_and_body_lines(table_text=html_no_close)
+        assert isinstance(headers, list)
+        assert isinstance(body, list)
+
+    # Test 7: Specific case for line 504 - data collection finds <tr but no </tr>
+    # Create HTML where we start collecting data rows but encounter incomplete row
+    with patch("docling_core.transforms.serializer.html._SimpleHTMLTableParser") as mock_parser_class:
+        mock_parser = MagicMock()
+        # Parser reports header then data rows
+        mock_parser.rows = [
+            {"th_cells": ["H"], "td_cells": []},
+            {"th_cells": [], "td_cells": ["D1"]},  # This triggers data collection
+        ]
+        mock_parser_class.return_value = mock_parser
+
+        # HTML has complete header but incomplete data row
+        html_incomplete_data = "<tr><th>H</th></tr><tr><td>D1</td></tr><tr><td>D2"
+        headers, body = serializer.get_header_and_body_lines(table_text=html_incomplete_data)
+        assert isinstance(headers, list)
+        assert isinstance(body, list)
+
+    # Test 8: Table with footer content
+    with_footer = "<tr><th>H</th></tr><tr><td>D</td></tr>Footer content"
+    headers, body = serializer.get_header_and_body_lines(table_text=with_footer)
+    assert isinstance(headers, list)
+    assert isinstance(body, list)
+    # Footer should be in body
+    assert "Footer" in str(body)
 
 
 def test_html_charts():
@@ -740,6 +979,73 @@ def test_html_rich_table(rich_table_doc):
     verify(exp_file=exp_file, actual=actual)
 
 
+def test_html_rich_cell_textitem_ref_subtree_inside_and_not_outside():
+    """Descendants of a RichTableCell's TextItem ref render inside the table.
+
+    With HTMLTextSerializer recursing into its item's children, the parent text
+    (CELL-TEXT) and its child (DEEP-LEAK) both render as siblings inside the
+    rich cell. The outer document iteration must not re-emit either of them as
+    standalone content after the table.
+    """
+    doc = DoclingDocument(name="rich_cell_textitem_subtree")
+
+    table = doc.add_table(data=TableData(num_rows=1, num_cols=2))
+    rich_ref = doc.add_text(label=DocItemLabel.TEXT, text="CELL-TEXT", parent=table)
+    doc.add_text(label=DocItemLabel.TEXT, text="DEEP-LEAK", parent=rich_ref)
+
+    doc.add_table_cell(
+        table_item=table,
+        cell=RichTableCell(
+            start_row_offset_idx=0,
+            end_row_offset_idx=1,
+            start_col_offset_idx=0,
+            end_col_offset_idx=1,
+            ref=rich_ref.get_ref(),
+            text="cell 0,0",
+        ),
+    )
+    doc.add_table_cell(
+        table_item=table,
+        cell=TableCell(
+            start_row_offset_idx=0,
+            end_row_offset_idx=1,
+            start_col_offset_idx=1,
+            end_col_offset_idx=2,
+            text="plain",
+        ),
+    )
+
+    out = HTMLDocSerializer(doc=doc).serialize().text
+    body = out[out.find("<body>") : out.find("</body>") + len("</body>")]
+    table_end = body.find("</table>") + len("</table>")
+    inside_table = body[:table_end]
+    after_table = body[table_end:]
+
+    assert "CELL-TEXT" in inside_table, f"RichTableCell ref content missing from the table:\n{body}"
+    assert "DEEP-LEAK" in inside_table, f"RichTableCell ref descendant missing from the table:\n{body}"
+    assert "CELL-TEXT" not in after_table, f"RichTableCell ref content leaked outside the table:\n{body}"
+    assert "DEEP-LEAK" not in after_table, f"RichTableCell ref descendant leaked outside the table:\n{body}"
+
+
+def test_html_textitem_with_children_at_document_level():
+    """Doc-level parity: TextItem with TextItem child renders both exactly once.
+
+    Once HTMLTextSerializer recurses into children, the child is rendered by
+    the parent's serialize call instead of by the outer iteration. Both must
+    still appear in document order, exactly once each.
+    """
+    doc = DoclingDocument(name="textitem_with_children")
+    parent = doc.add_text(label=DocItemLabel.TEXT, text="PARENT-TEXT")
+    doc.add_text(label=DocItemLabel.TEXT, text="CHILD-TEXT", parent=parent)
+
+    out = HTMLDocSerializer(doc=doc).serialize().text
+    body = out[out.find("<body>") : out.find("</body>") + len("</body>")]
+
+    assert body.count("PARENT-TEXT") == 1, f"PARENT-TEXT should appear exactly once:\n{body}"
+    assert body.count("CHILD-TEXT") == 1, f"CHILD-TEXT should appear exactly once:\n{body}"
+    assert body.find("PARENT-TEXT") < body.find("CHILD-TEXT"), f"PARENT-TEXT should appear before CHILD-TEXT:\n{body}"
+
+
 def test_html_inline_and_formatting():
     src = Path("./test/data/doc/inline_and_formatting.yaml")
     doc = DoclingDocument.load_from_yaml(src)
@@ -752,6 +1058,7 @@ def test_html_inline_and_formatting():
 # ===============================
 # WebVTT tests
 # ===============================
+
 
 @pytest.mark.parametrize(
     "example_num",
@@ -782,10 +1089,7 @@ def test_webvtt_params():
     assert "</v>" not in actual
 
     # Test with both parameters enabled
-    ser = WebVTTDocSerializer(
-        doc=doc,
-        params=WebVTTParams(omit_hours_if_zero=True, omit_voice_end=True)
-    )
+    ser = WebVTTDocSerializer(doc=doc, params=WebVTTParams(omit_hours_if_zero=True, omit_voice_end=True))
     actual = ser.serialize().text
 
     assert "00:11.000 --> 00:13.000" in actual
@@ -795,3 +1099,69 @@ def test_webvtt_params():
     actual_default = ser_default.serialize().text
     assert len(actual) <= len(actual_default) or actual != actual_default
 
+
+def test_html_meta_emits_xhtml_compatible_attributes():
+    """Test that metadata attributes are name=value pairs."""
+    doc = DoclingDocument(name="x")
+
+    plain = TableCell(
+        start_row_offset_idx=0,
+        end_row_offset_idx=1,
+        start_col_offset_idx=0,
+        end_col_offset_idx=1,
+        text="",
+    )
+    table = doc.add_table(data=TableData(num_rows=1, num_cols=1, table_cells=[plain]))
+
+    pic = doc.add_picture(parent=table)
+    pic.meta = PictureMeta(
+        classification=PictureClassificationMetaField(
+            predictions=[PictureClassificationPrediction(class_name="other", confidence=1.0)]
+        )
+    )
+
+    table.data.table_cells = [
+        RichTableCell(
+            start_row_offset_idx=0,
+            end_row_offset_idx=1,
+            start_col_offset_idx=0,
+            end_col_offset_idx=1,
+            text="",
+            ref=pic.get_ref(),
+        )
+    ]
+
+    text = doc.add_text(
+        label=DocItemLabel.TEXT, text="Output of HTML serializer must be parseable by a strict XML parser"
+    )
+    text.meta = BaseMeta(
+        summary=SummaryMetaField(text="XHTML-compliant"),
+        language=LanguageMetaField(code="en"),
+        entities=EntitiesMetaField(
+            mentions=[
+                EntityMention(
+                    text="HTML serializer",
+                    label="software",
+                    charspan=CharSpan((10, 25)),
+                ),
+                EntityMention(
+                    text="XML parser",
+                    label="software",
+                    charspan=CharSpan((56, 66)),
+                ),
+            ]
+        ),
+    )
+
+    html_out = table.export_to_html(doc)
+    # No bare valueless attribute like `data-meta-classification` (must be
+    # followed by `=` to be XHTML-compliant).
+    assert "data-meta-classification>" not in html_out
+    assert 'data-meta-name="classification"' in html_out
+
+    html_out = doc.export_to_html()
+    print(html_out)
+    assert 'data-meta-name="language"' in html_out
+    assert 'data-meta-name="entities"' in html_out
+    # Output must be parseable by a strict XML parser.
+    ET.fromstring(html_out)

@@ -6,14 +6,15 @@ import hashlib
 import json
 import logging
 import mimetypes
-import os
 import re
 import sys
+import tempfile
 import typing
 import warnings
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from enum import Enum
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from typing import (
     Annotated,
@@ -25,12 +26,14 @@ from typing import (
 )
 from urllib.parse import unquote
 
+import numpy as np
 import pandas as pd
 import yaml
 from PIL import Image as PILImage
 from pydantic import (
     AnyUrl,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     FieldSerializationInfo,
@@ -43,11 +46,10 @@ from pydantic import (
     model_validator,
     validate_call,
 )
-from tabulate import tabulate
+from tabulate import _column_type, tabulate
 from typing_extensions import Self, deprecated, override
 
-from docling_core.search.package import VERSION_PATTERN
-from docling_core.types.base import _JSON_POINTER_REGEX
+from docling_core.types.base import _JSON_POINTER_REGEX, VERSION_PATTERN, UniqueList
 from docling_core.types.doc import BoundingBox, Size
 from docling_core.types.doc.base import (
     CoordOrigin,
@@ -55,2517 +57,118 @@ from docling_core.types.doc.base import (
     PydanticSerCtxKey,
     round_pydantic_float,
 )
+
+# --- Re-exports from split modules (kept for backward compatibility) ---
+from docling_core.types.doc.common.annotations import (
+    BaseAnnotation,
+    DescriptionAnnotation,
+    MiscAnnotation,
+)
+from docling_core.types.doc.common.constants import (
+    CURRENT_VERSION,
+    DEFAULT_EXPORT_LABELS,
+    DOCUMENT_TOKENS_EXPORT_LABELS,
+)
+from docling_core.types.doc.common.content_layer import DEFAULT_CONTENT_LAYERS, ContentLayer
+from docling_core.types.doc.common.formatting import Formatting, Script
+from docling_core.types.doc.common.meta import (
+    BaseMeta,
+    BasePrediction,
+    CodeMetaField,
+    DescriptionMetaField,
+    EntitiesMetaField,
+    EntityMention,
+    FloatingMeta,
+    KeywordsMetaField,
+    LanguageMetaField,
+    MetaFieldName,
+    MetaUtils,
+    SummaryMetaField,
+    TopicsMetaField,
+    _ExtraAllowingModel,
+)
+from docling_core.types.doc.common.origin import DocumentOrigin
+from docling_core.types.doc.common.reference import (
+    CV2_INSTALLED,
+    FineRef,
+    ImageRef,
+    PageItem,
+    ProvenanceItem,
+    RefItem,
+)
+from docling_core.types.doc.common.scalars import CharSpan, LevelNumber, Uint64
+from docling_core.types.doc.common.source import BaseSource, SourceType, TrackSource
+from docling_core.types.doc.doctags import DocTagsDocument, DocTagsPage
+from docling_core.types.doc.items.code import CodeItem
+from docling_core.types.doc.items.content import ContentItem
+from docling_core.types.doc.items.form import FieldHeadingItem, FieldItem, FieldRegionItem, FieldValueItem
+from docling_core.types.doc.items.group import GroupItem, InlineGroup, ListGroup, OrderedList, UnorderedList
+from docling_core.types.doc.items.key_value import FormItem, GraphCell, GraphData, GraphLink, KeyValueItem
+from docling_core.types.doc.items.node import DocItem, FloatingItem, NodeItem
+from docling_core.types.doc.items.picture.charts import (
+    ChartBar,
+    ChartLine,
+    ChartPoint,
+    ChartSlice,
+    ChartStackedBar,
+    PictureBarChartData,
+    PictureChartData,
+    PictureLineChartData,
+    PicturePieChartData,
+    PictureScatterChartData,
+    PictureStackedBarChartData,
+    PictureTabularChartData,
+)
+from docling_core.types.doc.items.picture.classification import PictureClassificationClass, PictureClassificationData
+from docling_core.types.doc.items.picture.meta import (
+    MoleculeMetaField,
+    PictureClassificationMetaField,
+    PictureClassificationPrediction,
+    PictureMeta,
+    TabularChartMetaField,
+)
+from docling_core.types.doc.items.picture.molecule import PictureMoleculeData
+from docling_core.types.doc.items.picture.picture import (
+    BasePictureData,
+    PictureDataType,
+    PictureDescriptionData,
+    PictureItem,
+    PictureMiscData,
+)
+from docling_core.types.doc.items.table.table import TableAnnotationType, TableItem
+from docling_core.types.doc.items.table.table_data import (
+    AnyTableCell,
+    Orientation,
+    RichTableCell,
+    TableCell,
+    TableData,
+)
+from docling_core.types.doc.items.text import FormulaItem, ListItem, SectionHeaderItem, TextItem, TitleItem
 from docling_core.types.doc.labels import (
     CodeLanguageLabel,
     DocItemLabel,
     GraphCellLabel,
     GraphLinkLabel,
     GroupLabel,
+    HumanLanguageLabel,
     PictureClassificationLabel,
 )
 from docling_core.types.doc.tokens import DocumentToken, TableToken
-from docling_core.types.doc.utils import parse_otsl_table_content, relative_path
+from docling_core.types.doc.utils import (
+    _ensure_within_size_limit,
+    is_remote_path,
+    parse_otsl_table_content,
+    relative_path,
+    resolve_archive_path,
+    safe_extract_zip_archive,
+    validate_archive_relative_path,
+)
+from docling_core.utils.settings import settings
+
+# --- end re-exports ---
+
 
 _logger = logging.getLogger(__name__)
-
-Uint64 = typing.Annotated[int, Field(ge=0, le=(2**64 - 1))]
-LevelNumber = typing.Annotated[int, Field(ge=1, le=100)]
-CURRENT_VERSION: Final = "1.9.0"
-
-DEFAULT_EXPORT_LABELS = {
-    DocItemLabel.TITLE,
-    DocItemLabel.DOCUMENT_INDEX,
-    DocItemLabel.SECTION_HEADER,
-    DocItemLabel.PARAGRAPH,
-    DocItemLabel.TABLE,
-    DocItemLabel.PICTURE,
-    DocItemLabel.FORMULA,
-    DocItemLabel.CHECKBOX_UNSELECTED,
-    DocItemLabel.CHECKBOX_SELECTED,
-    DocItemLabel.TEXT,
-    DocItemLabel.LIST_ITEM,
-    DocItemLabel.CODE,
-    DocItemLabel.REFERENCE,
-    DocItemLabel.PAGE_HEADER,
-    DocItemLabel.PAGE_FOOTER,
-    DocItemLabel.KEY_VALUE_REGION,
-    DocItemLabel.EMPTY_VALUE,
-}
-
-DOCUMENT_TOKENS_EXPORT_LABELS = DEFAULT_EXPORT_LABELS.copy()
-DOCUMENT_TOKENS_EXPORT_LABELS.update(
-    [
-        DocItemLabel.FOOTNOTE,
-        DocItemLabel.CAPTION,
-        DocItemLabel.KEY_VALUE_REGION,
-        DocItemLabel.FORM,
-    ]
-)
-
-
-class BaseAnnotation(BaseModel):
-    """Base class for all annotation types."""
-
-    kind: str
-
-
-class PictureClassificationClass(BaseModel):
-    """PictureClassificationData."""
-
-    class_name: str
-    confidence: float
-
-    @field_serializer("confidence")
-    def _serialize(self, value: float, info: FieldSerializationInfo) -> float:
-        return round_pydantic_float(value, info.context, PydanticSerCtxKey.CONFID_PREC)
-
-
-class PictureClassificationData(BaseAnnotation):
-    """PictureClassificationData."""
-
-    kind: Literal["classification"] = "classification"
-    provenance: str
-    predicted_classes: list[PictureClassificationClass]
-
-
-class DescriptionAnnotation(BaseAnnotation):
-    """DescriptionAnnotation."""
-
-    kind: Literal["description"] = "description"
-    text: str
-    provenance: str
-
-
-class PictureMoleculeData(BaseAnnotation):
-    """PictureMoleculeData."""
-
-    kind: Literal["molecule_data"] = "molecule_data"
-    smi: str
-    confidence: float
-    class_name: str
-    segmentation: list[tuple[float, float]]
-    provenance: str
-
-    @field_serializer("confidence")
-    def _serialize(self, value: float, info: FieldSerializationInfo) -> float:
-        return round_pydantic_float(value, info.context, PydanticSerCtxKey.CONFID_PREC)
-
-
-class MiscAnnotation(BaseAnnotation):
-    """MiscAnnotation."""
-
-    kind: Literal["misc"] = "misc"
-    content: dict[str, Any]
-
-
-class ChartLine(BaseModel):
-    """Represents a line in a line chart.
-
-    Attributes:
-        label (str): The label for the line.
-        values (list[tuple[float, float]]): A list of (x, y) coordinate pairs
-            representing the line's data points.
-    """
-
-    label: str
-    values: list[tuple[float, float]]
-
-
-class ChartBar(BaseModel):
-    """Represents a bar in a bar chart.
-
-    Attributes:
-        label (str): The label for the bar.
-        values (float): The value associated with the bar.
-    """
-
-    label: str
-    values: float
-
-
-class ChartStackedBar(BaseModel):
-    """Represents a stacked bar in a stacked bar chart.
-
-    Attributes:
-        label (list[str]): The labels for the stacked bars. Multiple values are stored
-            in cases where the chart is "double stacked," meaning bars are stacked both
-            horizontally and vertically.
-        values (list[tuple[str, int]]): A list of values representing different segments
-            of the stacked bar along with their label.
-    """
-
-    label: list[str]
-    values: list[tuple[str, int]]
-
-
-class ChartSlice(BaseModel):
-    """Represents a slice in a pie chart.
-
-    Attributes:
-        label (str): The label for the slice.
-        value (float): The value represented by the slice.
-    """
-
-    label: str
-    value: float
-
-
-class ChartPoint(BaseModel):
-    """Represents a point in a scatter chart.
-
-    Attributes:
-        value (Tuple[float, float]): A (x, y) coordinate pair representing a point in a
-            chart.
-    """
-
-    value: tuple[float, float]
-
-
-class PictureChartData(BaseAnnotation):
-    """Base class for picture chart data.
-
-    Attributes:
-        title (str): The title of the chart.
-    """
-
-    title: str
-
-
-class PictureLineChartData(PictureChartData):
-    """Represents data of a line chart.
-
-    Attributes:
-        kind (Literal["line_chart_data"]): The type of the chart.
-        x_axis_label (str): The label for the x-axis.
-        y_axis_label (str): The label for the y-axis.
-        lines (list[ChartLine]): A list of lines in the chart.
-    """
-
-    kind: Literal["line_chart_data"] = "line_chart_data"
-    x_axis_label: str
-    y_axis_label: str
-    lines: list[ChartLine]
-
-
-class PictureBarChartData(PictureChartData):
-    """Represents data of a bar chart.
-
-    Attributes:
-        kind (Literal["bar_chart_data"]): The type of the chart.
-        x_axis_label (str): The label for the x-axis.
-        y_axis_label (str): The label for the y-axis.
-        bars (list[ChartBar]): A list of bars in the chart.
-    """
-
-    kind: Literal["bar_chart_data"] = "bar_chart_data"
-    x_axis_label: str
-    y_axis_label: str
-    bars: list[ChartBar]
-
-
-class PictureStackedBarChartData(PictureChartData):
-    """Represents data of a stacked bar chart.
-
-    Attributes:
-        kind (Literal["stacked_bar_chart_data"]): The type of the chart.
-        x_axis_label (str): The label for the x-axis.
-        y_axis_label (str): The label for the y-axis.
-        stacked_bars (list[ChartStackedBar]): A list of stacked bars in the chart.
-    """
-
-    kind: Literal["stacked_bar_chart_data"] = "stacked_bar_chart_data"
-    x_axis_label: str
-    y_axis_label: str
-    stacked_bars: list[ChartStackedBar]
-
-
-class PicturePieChartData(PictureChartData):
-    """Represents data of a pie chart.
-
-    Attributes:
-        kind (Literal["pie_chart_data"]): The type of the chart.
-        slices (list[ChartSlice]): A list of slices in the pie chart.
-    """
-
-    kind: Literal["pie_chart_data"] = "pie_chart_data"
-    slices: list[ChartSlice]
-
-
-class PictureScatterChartData(PictureChartData):
-    """Represents data of a scatter chart.
-
-    Attributes:
-        kind (Literal["scatter_chart_data"]): The type of the chart.
-        x_axis_label (str): The label for the x-axis.
-        y_axis_label (str): The label for the y-axis.
-        points (list[ChartPoint]): A list of points in the scatter chart.
-    """
-
-    kind: Literal["scatter_chart_data"] = "scatter_chart_data"
-    x_axis_label: str
-    y_axis_label: str
-    points: list[ChartPoint]
-
-
-class TableCell(BaseModel):
-    """TableCell."""
-
-    bbox: Optional[BoundingBox] = None
-    row_span: int = 1
-    col_span: int = 1
-    start_row_offset_idx: int
-    end_row_offset_idx: int
-    start_col_offset_idx: int
-    end_col_offset_idx: int
-    text: str
-    column_header: bool = False
-    row_header: bool = False
-    row_section: bool = False
-    fillable: bool = False
-
-    @model_validator(mode="before")
-    @classmethod
-    def from_dict_format(cls, data: Any) -> Any:
-        """from_dict_format."""
-        if isinstance(data, dict):
-            # Check if this is a native BoundingBox or a bbox from docling-ibm-models
-            if (
-                # "bbox" not in data
-                # or data["bbox"] is None
-                # or isinstance(data["bbox"], BoundingBox)
-                "text" in data
-            ):
-                return data
-            text = data.get("bbox", {}).get("token", "")
-            if not len(text):
-                text_cells = data.pop("text_cell_bboxes", None)
-                if text_cells:
-                    for el in text_cells:
-                        text += el["token"] + " "
-
-                text = text.strip()
-            data["text"] = text
-
-        return data
-
-    def _get_text(self, doc: Optional["DoclingDocument"] = None, **kwargs: Any) -> str:
-        return self.text
-
-
-class RichTableCell(TableCell):
-    """RichTableCell."""
-
-    ref: "RefItem"
-
-    @override
-    def _get_text(self, doc: Optional["DoclingDocument"] = None, **kwargs: Any) -> str:
-        from docling_core.transforms.serializer.markdown import MarkdownDocSerializer
-
-        if doc is not None:
-            doc_serializer = kwargs.pop("doc_serializer", MarkdownDocSerializer(doc=doc))
-            ser_res = doc_serializer.serialize(item=self.ref.resolve(doc=doc), **kwargs)
-            return ser_res.text
-        else:
-            return "<!-- rich cell -->"
-
-
-AnyTableCell = Annotated[
-    Union[RichTableCell, TableCell],
-    Field(union_mode="left_to_right"),
-]
-
-
-class TableData(BaseModel):  # TBD
-    """BaseTableData."""
-
-    table_cells: list[AnyTableCell] = []
-    num_rows: int = 0
-    num_cols: int = 0
-
-    @computed_field  # type: ignore
-    @property
-    def grid(
-        self,
-    ) -> list[list[TableCell]]:
-        """grid."""
-        # Initialise empty table data grid (only empty cells)
-        table_data = [
-            [
-                TableCell(
-                    text="",
-                    start_row_offset_idx=i,
-                    end_row_offset_idx=i + 1,
-                    start_col_offset_idx=j,
-                    end_col_offset_idx=j + 1,
-                )
-                for j in range(self.num_cols)
-            ]
-            for i in range(self.num_rows)
-        ]
-
-        # Overwrite cells in table data for which there is actual cell content.
-        for cell in self.table_cells:
-            for i in range(
-                min(cell.start_row_offset_idx, self.num_rows),
-                min(cell.end_row_offset_idx, self.num_rows),
-            ):
-                for j in range(
-                    min(cell.start_col_offset_idx, self.num_cols),
-                    min(cell.end_col_offset_idx, self.num_cols),
-                ):
-                    table_data[i][j] = cell
-
-        return table_data
-
-    def remove_rows(self, indices: list[int], doc: Optional["DoclingDocument"] = None) -> list[list[TableCell]]:
-        """Remove rows from the table by their indices.
-
-        :param indices: list[int]: A list of indices of the rows to remove. (Starting from 0)
-
-        :return: list[list[TableCell]]: A list representation of the removed rows as lists of TableCell objects.
-        """
-        if not indices:
-            return []
-
-        indices = sorted(indices, reverse=True)
-
-        refs_to_remove = []
-        all_removed_cells = []
-        for row_index in indices:
-            if row_index < 0 or row_index >= self.num_rows:
-                raise IndexError(
-                    f"Row index {row_index} is out of bounds for the current number of rows {self.num_rows}."
-                )
-
-            start_idx = row_index * self.num_cols
-            end_idx = start_idx + self.num_cols
-            removed_cells = self.table_cells[start_idx:end_idx]
-
-            for cell in removed_cells:
-                if isinstance(cell, RichTableCell):
-                    refs_to_remove.append(cell.ref)
-
-            # Remove the cells from the table
-            self.table_cells = self.table_cells[:start_idx] + self.table_cells[end_idx:]
-
-            # Update the number of rows
-            self.num_rows -= 1
-
-            # Reassign row offset indices for existing cells
-            for index, cell in enumerate(self.table_cells):
-                new_index = index // self.num_cols
-                cell.start_row_offset_idx = new_index
-                cell.end_row_offset_idx = new_index + 1
-
-            all_removed_cells.append(removed_cells)
-
-        if refs_to_remove:
-            if doc is None:
-                _logger.warning(
-                    "When table contains rich cells, `doc` argument must be provided, "
-                    "otherwise rich cell content will be left dangling."
-                )
-            else:
-                doc._delete_items(refs_to_remove)
-
-        return all_removed_cells
-
-    def pop_row(self, doc: Optional["DoclingDocument"] = None) -> list[TableCell]:
-        """Remove and return the last row from the table.
-
-        :returns: list[TableCell]: A list of TableCell objects representing the popped row.
-        """
-        if self.num_rows == 0:
-            raise IndexError("Cannot pop from an empty table.")
-
-        return self.remove_row(self.num_rows - 1, doc=doc)
-
-    def remove_row(self, row_index: int, doc: Optional["DoclingDocument"] = None) -> list[TableCell]:
-        """Remove a row from the table by its index.
-
-        :param row_index: int: The index of the row to remove. (Starting from 0)
-
-        :returns: list[TableCell]: A list of TableCell objects representing the removed row.
-        """
-        return self.remove_rows([row_index], doc=doc)[0]
-
-    def insert_rows(self, row_index: int, rows: list[list[str]], after: bool = False) -> None:
-        """Insert multiple new rows from a list of lists of strings before/after a specific index in the table.
-
-        :param row_index: int: The index at which to insert the new rows. (Starting from 0)
-        :param rows: list[list[str]]: A list of lists, where each inner list represents the content of a new row.
-        :param after: bool: If True, insert the rows after the specified index, otherwise before it. (Default is False)
-
-        :returns: None
-        """
-        effective_rows = rows[::-1]
-
-        for row in effective_rows:
-            self.insert_row(row_index, row, after)
-
-    def insert_row(self, row_index: int, row: list[str], after: bool = False) -> None:
-        """Insert a new row from a list of strings before/after a specific index in the table.
-
-        :param row_index: int: The index at which to insert the new row. (Starting from 0)
-        :param row: list[str]: A list of strings representing the content of the new row.
-        :param after: bool: If True, insert the row after the specified index, otherwise before it. (Default is False)
-
-        :returns: None
-        """
-        if len(row) != self.num_cols:
-            raise ValueError(f"Row length {len(row)} does not match the number of columns {self.num_cols}.")
-
-        effective_index = row_index + (1 if after else 0)
-
-        if effective_index < 0 or effective_index > self.num_rows:
-            raise IndexError(f"Row index {row_index} is out of bounds for the current number of rows {self.num_rows}.")
-
-        new_row_cells = [
-            TableCell(
-                text=text,
-                start_row_offset_idx=effective_index,
-                end_row_offset_idx=effective_index + 1,
-                start_col_offset_idx=j,
-                end_col_offset_idx=j + 1,
-            )
-            for j, text in enumerate(row)
-        ]
-
-        self.table_cells = (
-            self.table_cells[: effective_index * self.num_cols]
-            + new_row_cells
-            + self.table_cells[effective_index * self.num_cols :]
-        )
-
-        # Reassign row offset indices for existing cells
-        for index, cell in enumerate(self.table_cells):
-            new_index = index // self.num_cols
-            cell.start_row_offset_idx = new_index
-            cell.end_row_offset_idx = new_index + 1
-
-        self.num_rows += 1
-
-    def add_rows(self, rows: list[list[str]]) -> None:
-        """Add multiple new rows to the table from a list of lists of strings.
-
-        :param rows: list[list[str]]: A list of lists, where each inner list represents the content of a new row.
-
-        :returns: None
-        """
-        for row in rows:
-            self.add_row(row)
-
-    def add_row(self, row: list[str]) -> None:
-        """Add a new row to the table from a list of strings.
-
-        :param row: list[str]: A list of strings representing the content of the new row.
-
-        :returns: None
-        """
-        self.insert_row(row_index=self.num_rows - 1, row=row, after=True)
-
-    def get_row_bounding_boxes(self, *, minimal: bool = True) -> dict[int, BoundingBox]:
-        """Get the bounding box for each row in the table.
-
-        Args:
-            minimal: If True (default), returns the minimal bounding box for each
-                row based on its cells. If False, all rows will have uniform
-                horizontal extent (same x0/x1 values) spanning the full table width.
-
-        Returns:
-            dict[int, BoundingBox]: A dictionary mapping row indices to their
-            bounding boxes. Only rows with cells that have bounding boxes are included.
-        """
-        coords = []
-        for cell in self.table_cells:
-            if cell.bbox is not None:
-                coords.append(cell.bbox.coord_origin)
-
-        if len(set(coords)) > 1:
-            raise ValueError(
-                "All bounding boxes must have the same \
-                CoordOrigin to compute their union."
-            )
-
-        row_bboxes: dict[int, BoundingBox] = {}
-
-        for row_idx in range(self.num_rows):
-            row_cells_with_bbox: dict[int, list[BoundingBox]] = {}
-
-            # Collect all cells in this row that have bounding boxes
-            for cell in self.table_cells:
-                if cell.bbox is not None and cell.start_row_offset_idx <= row_idx < cell.end_row_offset_idx:
-                    row_span = cell.end_row_offset_idx - cell.start_row_offset_idx
-                    if row_span in row_cells_with_bbox:
-                        row_cells_with_bbox[row_span].append(cell.bbox)
-                    else:
-                        row_cells_with_bbox[row_span] = [cell.bbox]
-
-            # Calculate the enclosing bounding box for this row
-            if len(row_cells_with_bbox) > 0:
-                min_row_span = min(row_cells_with_bbox.keys())
-                row_bbox: BoundingBox = BoundingBox.enclosing_bbox(row_cells_with_bbox[min_row_span])
-
-                for rspan, bboxs in row_cells_with_bbox.items():
-                    for bbox in bboxs:
-                        row_bbox.l = min(row_bbox.l, bbox.l)
-                        row_bbox.r = max(row_bbox.r, bbox.r)
-
-                row_bboxes[row_idx] = row_bbox
-
-        # If not minimal, make all rows have uniform horizontal extent
-        if not minimal and row_bboxes:
-            global_l = min(bbox.l for bbox in row_bboxes.values())
-            global_r = max(bbox.r for bbox in row_bboxes.values())
-            for bbox in row_bboxes.values():
-                bbox.l = global_l
-                bbox.r = global_r
-
-        return row_bboxes
-
-    def get_column_bounding_boxes(self, *, minimal: bool = True) -> dict[int, BoundingBox]:
-        """Get the bounding box for each column in the table.
-
-        Args:
-            minimal: If True (default), returns the minimal bounding box for each
-                column based on its cells. If False, all columns will have uniform
-                vertical extent (same y0/y1 values) spanning the full table height.
-
-        Returns:
-            dict[int, BoundingBox]: A dictionary mapping column indices to their
-            bounding boxes. Only columns with cells that have bounding boxes are included.
-        """
-        coords = []
-        for cell in self.table_cells:
-            if cell.bbox is not None:
-                coords.append(cell.bbox.coord_origin)
-
-        if len(set(coords)) > 1:
-            raise ValueError(
-                "All bounding boxes must have the same \
-                CoordOrigin to compute their union."
-            )
-
-        col_bboxes: dict[int, BoundingBox] = {}
-
-        for col_idx in range(self.num_cols):
-            col_cells_with_bbox: dict[int, list[BoundingBox]] = {}
-
-            # Collect all cells in this row that have bounding boxes
-            for cell in self.table_cells:
-                if cell.bbox is not None and cell.start_col_offset_idx <= col_idx < cell.end_col_offset_idx:
-                    col_span = cell.end_col_offset_idx - cell.start_col_offset_idx
-                    if col_span in col_cells_with_bbox:
-                        col_cells_with_bbox[col_span].append(cell.bbox)
-                    else:
-                        col_cells_with_bbox[col_span] = [cell.bbox]
-
-            # Calculate the enclosing bounding box for this row
-            if len(col_cells_with_bbox) > 0:
-                min_col_span = min(col_cells_with_bbox.keys())
-                col_bbox: BoundingBox = BoundingBox.enclosing_bbox(col_cells_with_bbox[min_col_span])
-
-                for rspan, bboxs in col_cells_with_bbox.items():
-                    for bbox in bboxs:
-                        if bbox.coord_origin == CoordOrigin.TOPLEFT:
-                            col_bbox.b = max(col_bbox.b, bbox.b)
-                            col_bbox.t = min(col_bbox.t, bbox.t)
-
-                        elif bbox.coord_origin == CoordOrigin.BOTTOMLEFT:
-                            col_bbox.b = min(col_bbox.b, bbox.b)
-                            col_bbox.t = max(col_bbox.t, bbox.t)
-
-                col_bboxes[col_idx] = col_bbox
-
-        # If not minimal, make all columns have uniform vertical extent
-        if not minimal and col_bboxes:
-            # Get the coord_origin from the first bbox (they're all the same)
-            first_bbox = next(iter(col_bboxes.values()))
-            if first_bbox.coord_origin == CoordOrigin.TOPLEFT:
-                global_t = min(bbox.t for bbox in col_bboxes.values())
-                global_b = max(bbox.b for bbox in col_bboxes.values())
-            else:  # BOTTOMLEFT
-                global_t = max(bbox.t for bbox in col_bboxes.values())
-                global_b = min(bbox.b for bbox in col_bboxes.values())
-            for bbox in col_bboxes.values():
-                bbox.t = global_t
-                bbox.b = global_b
-
-        return col_bboxes
-
-    @classmethod
-    def _dedupe_bboxes(
-        cls,
-        elements: Sequence[BoundingBox],
-        *,
-        iou_threshold: float = 0.9,
-    ) -> list[BoundingBox]:
-        """Return elements whose bounding boxes are unique within ``iou_threshold``."""
-        deduped: list[BoundingBox] = []
-        for element in elements:
-            if all(element.intersection_over_union(kept) < iou_threshold for kept in deduped):
-                deduped.append(element)
-        return deduped
-
-    @classmethod
-    def _process_table_headers(
-        cls,
-        bbox: BoundingBox,
-        row_headers: list[BoundingBox] = [],
-        col_headers: list[BoundingBox] = [],
-        row_sections: list[BoundingBox] = [],
-    ) -> tuple[bool, bool, bool]:
-        c_column_header = False
-        c_row_header = False
-        c_row_section = False
-
-        for col_header in col_headers:
-            if bbox.intersection_over_self(col_header) >= 0.5:
-                c_column_header = True
-        for row_header in row_headers:
-            if bbox.intersection_over_self(row_header) >= 0.5:
-                c_row_header = True
-        for row_section in row_sections:
-            if bbox.intersection_over_self(row_section) >= 0.5:
-                c_row_section = True
-        return c_column_header, c_row_header, c_row_section
-
-    @classmethod
-    def _compute_cells(
-        cls,
-        rows: list[BoundingBox],
-        columns: list[BoundingBox],
-        merges: list[BoundingBox],
-        row_headers: list[BoundingBox] = [],
-        col_headers: list[BoundingBox] = [],
-        row_sections: list[BoundingBox] = [],
-        row_overlap_threshold: float = 0.5,  # how much of a row a merge must cover vertically
-        col_overlap_threshold: float = 0.5,  # how much of a column a merge must cover horizontally
-    ) -> list[TableCell]:
-        """Returns TableCell. Merged cells are aligned to grid boundaries.
-
-        rows, columns, merges are lists of BoundingBox(l,t,r,b).
-        """
-        rows.sort(key=lambda r: (r.t + r.b) / 2.0)
-        columns.sort(key=lambda c: (c.l + c.r) / 2.0)
-
-        def span_from_merge(
-            m: BoundingBox, lines: list[BoundingBox], axis: str, frac_threshold: float
-        ) -> Optional[tuple[int, int]]:
-            """Map a merge bbox to an inclusive index span over rows or columns.
-
-            axis='row' uses vertical overlap vs row height; axis='col' uses horizontal overlap vs col width.
-            If nothing meets threshold, pick the single best-overlapping line if overlap>0; else return None.
-            """
-            idxs = []
-            best_i, best_len = None, 0.0
-            for i, elem in enumerate(lines):
-                inter = m.get_intersection_bbox(elem)
-                if not inter:
-                    continue
-                if axis == "row":
-                    overlap_len = inter.height
-                    base = max(1e-9, elem.height)
-                else:
-                    overlap_len = inter.width
-                    base = max(1e-9, elem.width)
-
-                frac = overlap_len / base
-                if frac >= frac_threshold:
-                    idxs.append(i)
-
-                if overlap_len > best_len:
-                    best_len, best_i = overlap_len, i
-
-            if idxs:
-                return min(idxs), max(idxs)
-            if best_i is not None and best_len > 0.0:
-                return best_i, best_i
-            return None
-
-        cells: list[TableCell] = []
-        covered: set[tuple[int, int]] = set()
-        seen_merge_rects: set[tuple[int, int, int, int]] = set()
-
-        # 1) Add merged cells first (and mark their covered simple cells)
-        for m in merges:
-            rspan = span_from_merge(m, rows, axis="row", frac_threshold=row_overlap_threshold)
-            cspan = span_from_merge(m, columns, axis="col", frac_threshold=col_overlap_threshold)
-            if rspan is None or cspan is None:
-                # Can't confidently map this merge to grid -> skip it
-                continue
-
-            sr, er = rspan
-            sc, ec = cspan
-            rect_key = (sr, er, sc, ec)
-            if rect_key in seen_merge_rects:
-                continue
-            seen_merge_rects.add(rect_key)
-
-            # Grid-aligned bbox for the merged cell
-            grid_bbox = BoundingBox(
-                l=columns[sc].l,
-                t=rows[sr].t,
-                r=columns[ec].r,
-                b=rows[er].b,
-            )
-            c_column_header, c_row_header, c_row_section = cls._process_table_headers(
-                grid_bbox, col_headers, row_headers, row_sections
-            )
-
-            cells.append(
-                TableCell(
-                    text="",
-                    row_span=er - sr + 1,
-                    col_span=ec - sc + 1,
-                    start_row_offset_idx=sr,
-                    end_row_offset_idx=er + 1,
-                    start_col_offset_idx=sc,
-                    end_col_offset_idx=ec + 1,
-                    bbox=grid_bbox,
-                    column_header=c_column_header,
-                    row_header=c_row_header,
-                    row_section=c_row_section,
-                )
-            )
-            for ri in range(sr, er + 1):
-                for ci in range(sc, ec + 1):
-                    covered.add((ri, ci))
-
-        # 2) Add simple (1x1) cells where not covered by merges
-        for ri, row in enumerate(rows):
-            for ci, col in enumerate(columns):
-                if (ri, ci) in covered:
-                    continue
-                inter = row.get_intersection_bbox(col)
-                if not inter:
-                    # In degenerate cases (big gaps), there might be no intersection; skip.
-                    continue
-                c_column_header, c_row_header, c_row_section = cls._process_table_headers(
-                    inter, col_headers, row_headers, row_sections
-                )
-                cells.append(
-                    TableCell(
-                        text="",
-                        row_span=1,
-                        col_span=1,
-                        start_row_offset_idx=ri,
-                        end_row_offset_idx=ri + 1,
-                        start_col_offset_idx=ci,
-                        end_col_offset_idx=ci + 1,
-                        bbox=inter,
-                        column_header=c_column_header,
-                        row_header=c_row_header,
-                        row_section=c_row_section,
-                    )
-                )
-        return cells
-
-    @classmethod
-    def from_regions(
-        cls,
-        table_bbox: BoundingBox,
-        rows: list[BoundingBox],
-        cols: list[BoundingBox],
-        merges: list[BoundingBox],
-        row_headers: list[BoundingBox] = [],
-        col_headers: list[BoundingBox] = [],
-        row_sections: list[BoundingBox] = [],
-    ) -> Self:
-        """Converts regions: rows, columns, merged cells into table_data structure.
-
-        Adds semantics for regions of row_headers, col_headers, row_section
-        """
-        default_containment_thresh = 0.5
-        rows.extend(row_sections)  # use row sections to compensate for missing rows
-        rows = cls._dedupe_bboxes(
-            [e for e in rows if e.intersection_over_self(table_bbox) >= default_containment_thresh]
-        )
-        cols = cls._dedupe_bboxes(
-            [e for e in cols if e.intersection_over_self(table_bbox) >= default_containment_thresh]
-        )
-        merges = cls._dedupe_bboxes(
-            [e for e in merges if e.intersection_over_self(table_bbox) >= default_containment_thresh]
-        )
-
-        col_headers = cls._dedupe_bboxes(
-            [e for e in col_headers if e.intersection_over_self(table_bbox) >= default_containment_thresh]
-        )
-        row_headers = cls._dedupe_bboxes(
-            [e for e in row_headers if e.intersection_over_self(table_bbox) >= default_containment_thresh]
-        )
-        row_sections = cls._dedupe_bboxes(
-            [e for e in row_sections if e.intersection_over_self(table_bbox) >= default_containment_thresh]
-        )
-
-        # Compute table cells from CVAT elements: rows, cols, merges
-        computed_table_cells = cls._compute_cells(
-            rows,
-            cols,
-            merges,
-            col_headers,
-            row_headers,
-            row_sections,
-        )
-
-        # If no table structure found, create single fake cell for content
-        if not rows or not cols:
-            computed_table_cells = [
-                TableCell(
-                    text="",
-                    row_span=1,
-                    col_span=1,
-                    start_row_offset_idx=0,
-                    end_row_offset_idx=1,
-                    start_col_offset_idx=0,
-                    end_col_offset_idx=1,
-                    bbox=table_bbox,
-                    column_header=False,
-                    row_header=False,
-                    row_section=False,
-                )
-            ]
-            table_data = cls(num_rows=1, num_cols=1)
-        else:
-            table_data = cls(num_rows=len(rows), num_cols=len(cols))
-
-        table_data.table_cells = computed_table_cells
-
-        return table_data
-
-
-class PictureTabularChartData(PictureChartData):
-    """Base class for picture chart data.
-
-    Attributes:
-        title (str): The title of the chart.
-        chart_data (TableData): Chart data in the table format.
-    """
-
-    kind: Literal["tabular_chart_data"] = "tabular_chart_data"
-    chart_data: TableData
-
-
-PictureDataType = Annotated[
-    Union[
-        DescriptionAnnotation,
-        MiscAnnotation,
-        PictureClassificationData,
-        PictureMoleculeData,
-        PictureTabularChartData,
-        PictureLineChartData,
-        PictureBarChartData,
-        PictureStackedBarChartData,
-        PicturePieChartData,
-        PictureScatterChartData,
-    ],
-    Field(discriminator="kind"),
-]
-
-
-class DocumentOrigin(BaseModel):
-    """FileSource."""
-
-    mimetype: str  # the mimetype of the original file
-    binary_hash: Uint64  # the binary hash of the original file.
-    # TODO: Change to be Uint64 and provide utility method to generate
-
-    filename: str  # The name of the original file, including extension, without path.
-    # Could stem from filesystem, source URI, Content-Disposition header, ...
-
-    uri: Optional[AnyUrl] = (
-        None  # any possible reference to a source file,
-        # from any file handler protocol (e.g. https://, file://, s3://)
-    )
-
-    _extra_mimetypes: typing.ClassVar[list[str]] = [
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
-        "application/vnd.openxmlformats-officedocument.presentationml.template",
-        "application/vnd.openxmlformats-officedocument.presentationml.slideshow",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "text/asciidoc",
-        "text/markdown",
-        "text/csv",
-        "text/vtt",
-        "audio/x-wav",
-        "audio/wav",
-        "audio/mp3",
-    ]
-
-    @field_validator("binary_hash", mode="before")
-    @classmethod
-    def parse_hex_string(cls, value):
-        """parse_hex_string."""
-        if isinstance(value, str):
-            try:
-                # Convert hex string to an integer
-                hash_int = Uint64(value, 16)
-                # Mask to fit within 64 bits (unsigned)
-                return hash_int & 0xFFFFFFFFFFFFFFFF  # TODO be sure it doesn't clip uint64 max
-            except ValueError:
-                raise ValueError(f"Invalid sha256 hexdigest: {value}")
-        return value  # If already an int, return it as is.
-
-    @field_validator("mimetype")
-    @classmethod
-    def validate_mimetype(cls, v):
-        """validate_mimetype."""
-        # Check if the provided MIME type is valid using mimetypes module
-        if v not in mimetypes.types_map.values() and v not in cls._extra_mimetypes:
-            raise ValueError(f"'{v}' is not a valid MIME type")
-        return v
-
-
-class RefItem(BaseModel):
-    """RefItem."""
-
-    cref: str = Field(alias="$ref", pattern=_JSON_POINTER_REGEX)
-
-    # This method makes RefItem compatible with DocItem
-    def get_ref(self):
-        """get_ref."""
-        return self
-
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-
-    def _split_ref_to_path(self):
-        """Get the path of the reference."""
-        return self.cref.split("/")
-
-    def resolve(self, doc: "DoclingDocument"):
-        """Resolve the path in the document."""
-        path_components = self.cref.split("/")
-        if (num_comps := len(path_components)) == 3:
-            _, path, index_str = path_components
-            index = int(index_str)
-            obj = doc.__getattribute__(path)[index]
-        elif num_comps == 2:
-            _, path = path_components
-            obj = doc.__getattribute__(path)
-        else:
-            raise RuntimeError(f"Unsupported number of path components: {num_comps}")
-        return obj
-
-    def _update_with_lookup(
-        self,
-        lookup: dict[str, dict[int, int]],
-    ) -> None:
-        path = self._split_ref_to_path()
-        if len(path) == 3 and (item_label := path[1]) in lookup:
-            item_index = int(path[2])
-            # Count how many items have been deleted in front of you
-            delta = sum(val if item_index >= key else 0 for key, val in lookup[item_label].items())
-            new_index = item_index + delta
-            self.cref = f"#/{item_label}/{new_index}"
-
-
-class ImageRef(BaseModel):
-    """ImageRef."""
-
-    mimetype: str
-    dpi: int
-    size: Size
-    uri: Union[AnyUrl, Path] = Field(union_mode="left_to_right")
-    _pil: Optional[PILImage.Image] = None
-
-    @property
-    def pil_image(self) -> Optional[PILImage.Image]:
-        """Return the PIL Image."""
-        if self._pil is not None:
-            return self._pil
-
-        if isinstance(self.uri, AnyUrl):
-            if self.uri.scheme == "data":
-                encoded_img = str(self.uri).split(",")[1]
-                decoded_img = base64.b64decode(encoded_img)
-                self._pil = PILImage.open(BytesIO(decoded_img))
-            elif self.uri.scheme == "file":
-                self._pil = PILImage.open(unquote(str(self.uri.path)))
-            # else: Handle http request or other protocols...
-        elif isinstance(self.uri, Path):
-            self._pil = PILImage.open(self.uri)
-
-        return self._pil
-
-    @field_validator("mimetype")
-    @classmethod
-    def validate_mimetype(cls, v):
-        """validate_mimetype."""
-        # Check if the provided MIME type is valid using mimetypes module
-        if v not in mimetypes.types_map.values():
-            raise ValueError(f"'{v}' is not a valid MIME type")
-        return v
-
-    @classmethod
-    def from_pil(cls, image: PILImage.Image, dpi: int) -> Self:
-        """Construct ImageRef from a PIL Image."""
-        buffered = BytesIO()
-        image.save(buffered, format="PNG")
-        img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
-        img_uri = f"data:image/png;base64,{img_str}"
-        return cls(
-            mimetype="image/png",
-            dpi=dpi,
-            size=Size(width=image.width, height=image.height),
-            uri=img_uri,
-            _pil=image,
-        )
-
-
-class DocTagsPage(BaseModel):
-    """DocTagsPage."""
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    tokens: str
-    image: Optional[PILImage.Image] = None
-
-
-class DocTagsDocument(BaseModel):
-    """DocTagsDocument."""
-
-    pages: list[DocTagsPage] = []
-
-    @classmethod
-    def from_doctags_and_image_pairs(
-        cls,
-        doctags: typing.Sequence[Union[Path, str]],
-        images: Optional[list[Union[Path, PILImage.Image]]],
-    ):
-        """from_doctags_and_image_pairs."""
-        if images is not None and len(doctags) != len(images):
-            raise ValueError("Number of page doctags must be equal to page images!")
-        doctags_doc = cls()
-
-        pages = []
-
-        for ix, dt in enumerate(doctags):
-            if isinstance(dt, Path):
-                with dt.open("r") as fp:
-                    dt = fp.read()
-            elif isinstance(dt, str):
-                pass
-
-            img = None
-            if images is not None:
-                img = images[ix]
-
-                if isinstance(img, Path):
-                    img = PILImage.open(img)
-                elif isinstance(img, PILImage.Image):
-                    pass
-
-            page = DocTagsPage(tokens=dt, image=img)
-            pages.append(page)
-
-        doctags_doc.pages = pages
-        return doctags_doc
-
-    @classmethod
-    def from_multipage_doctags_and_images(
-        cls,
-        doctags: Union[Path, str],
-        images: Optional[list[Union[Path, PILImage.Image]]],
-    ):
-        """From doctags with `<page_break>` and corresponding list of page images."""
-        if isinstance(doctags, Path):
-            with doctags.open("r") as fp:
-                doctags = fp.read()
-        dt_list = (
-            doctags.removeprefix(f"<{DocumentToken.DOCUMENT.value}>")
-            .removesuffix(f"</{DocumentToken.DOCUMENT.value}>")
-            .split(f"<{DocumentToken.PAGE_BREAK.value}>")
-        )
-        dt_list = [el.strip() for el in dt_list]
-
-        return cls.from_doctags_and_image_pairs(dt_list, images)
-
-
-class ProvenanceItem(BaseModel):
-    """Provenance information for elements extracted from a textual document.
-
-    A `ProvenanceItem` object acts as a lightweight pointer back into the original
-    document for an extracted element. It applies to documents with an explicity
-    or implicit layout, such as PDF, HTML, docx, or pptx.
-    """
-
-    page_no: Annotated[int, Field(description="Page number")]
-    bbox: Annotated[BoundingBox, Field(description="Bounding box")]
-    charspan: Annotated[tuple[int, int], Field(description="Character span (0-indexed)")]
-
-
-class BaseSource(BaseModel):
-    """Base class for source information.
-
-    Represents the source of an extracted component within a digital asset.
-    """
-
-    kind: Annotated[str, Field(description="Kind of source. It is used as a discriminator for the source type.")]
-
-
-class TrackSource(BaseSource):
-    """Source metadata for a cue extracted from a media track.
-
-    A `TrackSource` instance identifies a cue in a media track (audio, video, subtitles, screen-recording captions,
-    etc.). A *cue* here refers to any discrete segment that was pulled out of the original asset, e.g., a subtitle
-    block, an audio clip, or a timed marker in a screen-recording.
-    """
-
-    model_config = ConfigDict(regex_engine="python-re")
-    kind: Annotated[Literal["track"], Field(description="Identifies this type of source.")] = "track"
-    start_time: Annotated[
-        float,
-        Field(
-            examples=[11.0, 6.5, 5370.0],
-            description="Start time offset of the track cue in seconds",
-        ),
-    ]
-    end_time: Annotated[
-        float,
-        Field(
-            examples=[12.0, 8.2, 5370.1],
-            description="End time offset of the track cue in seconds",
-        ),
-    ]
-    identifier: Annotated[
-        str | None, Field(description="An identifier of the cue", examples=["test", "123", "b72d946"])
-    ] = None
-    voice: Annotated[
-        str | None,
-        Field(description="The name of the voice in this track (the speaker)", examples=["John", "Mary", "Speaker 1"]),
-    ] = None
-
-    @model_validator(mode="after")
-    def check_order(self) -> Self:
-        """Ensure start time is less than the end time."""
-        if self.end_time <= self.start_time:
-            raise ValueError("End time must be greater than start time")
-        return self
-
-
-SourceType = Annotated[Union[TrackSource], Field(discriminator="kind")]
-"""Union type for all source types.
-
-This type alias represents a discriminated union of all available source types that can be associated with
-extracted elements in a document. The `kind` field is used as a discriminator to determine the specific
-source type at runtime.
-
-Currently supported source types:
-    - `TrackSource`: For elements extracted from media assets (audio, video, subtitles)
-
-Notes:
-    - Additional source types may be added to this union in the future to support other content sources.
-    - For documents with an implicit or explicity layout, such as PDF, HTML, docx, pptx, or markdown files, the
-        `ProvenanceItem` should still be used.
-"""
-
-
-class ContentLayer(str, Enum):
-    """ContentLayer."""
-
-    BODY = "body"  # main content of the document
-    FURNITURE = "furniture"  # eg page-headers/footers
-    BACKGROUND = "background"  # eg watermarks
-    INVISIBLE = "invisible"  # hidden or invisible text
-    NOTES = "notes"  # author/speaker notes, corrections, etc
-
-
-DEFAULT_CONTENT_LAYERS = {ContentLayer.BODY}
-
-
-class _ExtraAllowingModel(BaseModel):
-    """Base model allowing extra fields."""
-
-    model_config = ConfigDict(extra="allow")
-
-    def get_custom_part(self) -> dict[str, Any]:
-        """Get the extra fields as a dictionary."""
-        return self.__pydantic_extra__ or {}
-
-    def _copy_without_extra(self) -> Self:
-        """Create a copy without the extra fields."""
-        return self.model_validate(self.model_dump(exclude=set(self.get_custom_part())))
-
-    def _check_custom_field_format(self, key: str) -> None:
-        parts = key.split(MetaUtils._META_FIELD_NAMESPACE_DELIMITER, maxsplit=1)
-        if len(parts) != 2 or (not parts[0]) or (not parts[1]):
-            raise ValueError(
-                f"Custom meta field name must be in format 'namespace__field_name' (e.g. 'my_corp__max_size'): {key}"
-            )
-
-    @model_validator(mode="after")
-    def _validate_field_names(self) -> Self:
-        extra_dict = self.get_custom_part()
-        for key in self.model_dump():
-            if key in extra_dict:
-                self._check_custom_field_format(key=key)
-            elif MetaUtils._META_FIELD_NAMESPACE_DELIMITER in key:
-                raise ValueError(f"Standard meta field name must not contain '__': {key}")
-
-        return self
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        super().__setattr__(name, value)
-        if name in self.get_custom_part():
-            self._check_custom_field_format(key=name)
-
-    def set_custom_field(self, namespace: str, name: str, value: Any) -> str:
-        """Set a custom field and return the key."""
-        key = MetaUtils.create_meta_field_name(namespace=namespace, name=name)
-        setattr(self, key, value)
-        return key
-
-
-class BasePrediction(_ExtraAllowingModel):
-    """Prediction field."""
-
-    confidence: Optional[float] = Field(
-        default=None,
-        ge=0,
-        le=1,
-        description="The confidence of the prediction.",
-        examples=[0.9, 0.42],
-    )
-    created_by: Optional[str] = Field(
-        default=None,
-        description="The origin of the prediction.",
-        examples=["ibm-granite/granite-docling-258M"],
-    )
-
-    @field_serializer("confidence")
-    def _serialize(self, value: float, info: FieldSerializationInfo) -> float:
-        return round_pydantic_float(value, info.context, PydanticSerCtxKey.CONFID_PREC)
-
-
-class SummaryMetaField(BasePrediction):
-    """Summary data."""
-
-    text: str
-
-
-# NOTE: must be manually kept in sync with top-level BaseMeta hierarchy fields
-class MetaFieldName(str, Enum):
-    """Standard meta field names."""
-
-    SUMMARY = "summary"  # a summary of the tree under this node
-    DESCRIPTION = "description"  # a description of the node (e.g. for images)
-    CLASSIFICATION = "classification"  # a classification of the node content
-    MOLECULE = "molecule"  # molecule data
-    TABULAR_CHART = "tabular_chart"  # tabular chart data
-
-
-class BaseMeta(_ExtraAllowingModel):
-    """Base class for metadata."""
-
-    summary: Optional[SummaryMetaField] = None
-
-
-class DescriptionMetaField(BasePrediction):
-    """Description metadata field."""
-
-    text: str
-
-
-class PictureClassificationPrediction(BasePrediction):
-    """Picture classification instance."""
-
-    class_name: str
-
-
-class PictureClassificationMetaField(_ExtraAllowingModel):
-    """Picture classification metadata field."""
-
-    predictions: list[PictureClassificationPrediction] = Field(default_factory=list, min_length=1)
-
-    def get_main_prediction(self) -> PictureClassificationPrediction:
-        """Get prediction with highest confidence (if confidence not available, first is used by convention)."""
-        max_conf_pos: Optional[int] = None
-        max_conf: Optional[float] = None
-        for i, pred in enumerate(self.predictions):
-            if pred.confidence is not None and (max_conf is None or pred.confidence > max_conf):
-                max_conf_pos = i
-                max_conf = pred.confidence
-        return self.predictions[max_conf_pos if max_conf_pos is not None else 0]
-
-
-class MoleculeMetaField(BasePrediction):
-    """Molecule metadata field."""
-
-    smi: str = Field(description="The SMILES representation of the molecule.")
-
-
-class TabularChartMetaField(BasePrediction):
-    """Tabular chart metadata field."""
-
-    title: Optional[str] = None
-    chart_data: TableData
-
-
-class FloatingMeta(BaseMeta):
-    """Metadata model for floating."""
-
-    description: Optional[DescriptionMetaField] = None
-
-
-class PictureMeta(FloatingMeta):
-    """Metadata model for pictures."""
-
-    classification: Optional[PictureClassificationMetaField] = None
-    molecule: Optional[MoleculeMetaField] = None
-    tabular_chart: Optional[TabularChartMetaField] = None
-
-
-class NodeItem(BaseModel):
-    """NodeItem."""
-
-    self_ref: str = Field(pattern=_JSON_POINTER_REGEX)
-    parent: Optional[RefItem] = None
-    children: list[RefItem] = []
-
-    content_layer: ContentLayer = ContentLayer.BODY
-
-    model_config = ConfigDict(extra="forbid")
-
-    meta: Optional[BaseMeta] = None
-
-    def get_ref(self) -> RefItem:
-        """get_ref."""
-        return RefItem(cref=self.self_ref)
-
-    def _get_parent_ref(self, doc: "DoclingDocument", stack: list[int]) -> Optional[RefItem]:
-        """get_parent_ref."""
-        if len(stack) == 0:
-            return self.parent
-        elif len(stack) > 0 and stack[0] < len(self.children):
-            item = self.children[stack[0]].resolve(doc)
-            return item._get_parent_ref(doc=doc, stack=stack[1:])
-
-        return None
-
-    def _delete_child(self, doc: "DoclingDocument", stack: list[int]) -> bool:
-        """Delete child node in tree."""
-        if len(stack) == 1 and stack[0] < len(self.children):
-            del self.children[stack[0]]
-            return True
-        elif len(stack) > 1 and stack[0] < len(self.children):
-            item = self.children[stack[0]].resolve(doc)
-            return item._delete_child(doc=doc, stack=stack[1:])
-
-        return False
-
-    def _update_child(self, doc: "DoclingDocument", stack: list[int], new_ref: RefItem) -> bool:
-        """Update child node in tree."""
-        if len(stack) == 1 and stack[0] < len(self.children):
-            # ensure the parent is correct
-            new_item = new_ref.resolve(doc=doc)
-            new_item.parent = self.get_ref()
-
-            self.children[stack[0]] = new_ref
-            return True
-        elif len(stack) > 1 and stack[0] < len(self.children):
-            item = self.children[stack[0]].resolve(doc)
-            return item._update_child(doc=doc, stack=stack[1:], new_ref=new_ref)
-
-        return False
-
-    def _add_child(self, doc: "DoclingDocument", stack: list[int], new_ref: RefItem) -> bool:
-        """Append child to node identified by stack."""
-        if len(stack) == 0:
-            # ensure the parent is correct
-            new_item = new_ref.resolve(doc=doc)
-            new_item.parent = self.get_ref()
-
-            self.children.append(new_ref)
-            return True
-        elif len(stack) > 0 and stack[0] < len(self.children):
-            item = self.children[stack[0]].resolve(doc)
-            return item._add_child(doc=doc, stack=stack[1:], new_ref=new_ref)
-
-        return False
-
-    def _add_sibling(
-        self,
-        doc: "DoclingDocument",
-        stack: list[int],
-        new_ref: RefItem,
-        after: bool = True,
-    ) -> bool:
-        """Add sibling node in tree."""
-        if len(stack) == 1 and stack[0] <= len(self.children) and (not after):
-            # ensure the parent is correct
-            new_item = new_ref.resolve(doc=doc)
-            new_item.parent = self.get_ref()
-
-            self.children.insert(stack[0], new_ref)
-            return True
-        elif len(stack) == 1 and stack[0] < len(self.children) and (after):
-            # ensure the parent is correct
-            new_item = new_ref.resolve(doc=doc)
-            new_item.parent = self.get_ref()
-
-            self.children.insert(stack[0] + 1, new_ref)
-            return True
-        elif len(stack) > 1 and stack[0] < len(self.children):
-            item = self.children[stack[0]].resolve(doc)
-            return item._add_sibling(doc=doc, stack=stack[1:], new_ref=new_ref, after=after)
-
-        return False
-
-
-class GroupItem(NodeItem):  # Container type, can't be a leaf node
-    """GroupItem."""
-
-    name: str = (
-        "group"  # Name of the group, e.g. "Introduction Chapter",
-        # "Slide 5", "Navigation menu list", ...
-    )
-    # TODO narrow down to allowed values, i.e. excluding those used for subtypes
-    label: GroupLabel = GroupLabel.UNSPECIFIED
-
-
-class ListGroup(GroupItem):
-    """ListGroup."""
-
-    label: typing.Literal[GroupLabel.LIST] = GroupLabel.LIST  # type: ignore[assignment]
-
-    @field_validator("label", mode="before")
-    @classmethod
-    def patch_ordered(cls, value):
-        """patch_ordered."""
-        return GroupLabel.LIST if value == GroupLabel.ORDERED_LIST else value
-
-    def first_item_is_enumerated(self, doc: "DoclingDocument"):
-        """Whether the first list item is enumerated."""
-        return (
-            len(self.children) > 0
-            and isinstance(first_child := self.children[0].resolve(doc), ListItem)
-            and first_child.enumerated
-        )
-
-
-@deprecated("Use ListGroup instead.")
-class OrderedList(GroupItem):
-    """OrderedList."""
-
-    label: typing.Literal[GroupLabel.ORDERED_LIST] = GroupLabel.ORDERED_LIST  # type: ignore[assignment]
-
-
-class InlineGroup(GroupItem):
-    """InlineGroup."""
-
-    label: typing.Literal[GroupLabel.INLINE] = GroupLabel.INLINE
-
-
-class FineRef(RefItem):
-    """Fine-granular reference item that can capture span range info."""
-
-    range: Optional[tuple[int, int]] = None  # start_inclusive, end_exclusive
-
-
-class DocItem(NodeItem):
-    """Base type for any element that carries content, can be a leaf node."""
-
-    label: DocItemLabel
-    prov: list[ProvenanceItem] = []
-    source: Annotated[
-        list[SourceType],
-        Field(
-            description="The provenance of this document item. Currently, it is only used for media track provenance."
-        ),
-    ] = []
-    comments: list[FineRef] = []  # References to comment items annotating this content
-
-    @model_serializer(mode="wrap")
-    def _custom_pydantic_serialize(self, handler: SerializerFunctionWrapHandler) -> dict:
-        dumped = handler(self)
-
-        # suppress serializing comment and source lists when empty:
-        for field in {"comments", "source"}:
-            if dumped.get(field) == []:
-                del dumped[field]
-
-        return dumped
-
-    def get_location_tokens(
-        self,
-        doc: "DoclingDocument",
-        new_line: str = "",  # deprecated
-        xsize: int = 500,
-        ysize: int = 500,
-        self_closing: bool = False,
-    ) -> str:
-        """Get the location string for the BaseCell."""
-        if not len(self.prov):
-            return ""
-
-        location = ""
-        for prov in self.prov:
-            page_w, page_h = doc.pages[prov.page_no].size.as_tuple()
-
-            loc_str = DocumentToken.get_location(
-                bbox=prov.bbox.to_top_left_origin(page_h).as_tuple(),
-                page_w=page_w,
-                page_h=page_h,
-                xsize=xsize,
-                ysize=ysize,
-                self_closing=self_closing,
-            )
-            location += loc_str
-
-        return location
-
-    def get_image(self, doc: "DoclingDocument", prov_index: int = 0) -> Optional[PILImage.Image]:
-        """Returns the image of this DocItem.
-
-        The function returns None if this DocItem has no valid provenance or
-        if a valid image of the page containing this DocItem is not available
-        in doc.
-        """
-        if not self.prov or prov_index >= len(self.prov):
-            return None
-        prov = self.prov[prov_index]
-        if not isinstance(prov, ProvenanceItem):
-            return None
-
-        page = doc.pages.get(prov.page_no)
-        if page is None or page.size is None or page.image is None:
-            return None
-
-        page_image = page.image.pil_image
-        if not page_image:
-            return None
-        crop_bbox = (
-            self.prov[prov_index]
-            .bbox.to_top_left_origin(page_height=page.size.height)
-            .scale_to_size(old_size=page.size, new_size=page.image.size)
-            # .scaled(scale=page_image.height / page.size.height)
-        )
-        return page_image.crop(crop_bbox.as_tuple())
-
-    def get_annotations(self) -> Sequence[BaseAnnotation]:
-        """Get the annotations of this DocItem."""
-        return []
-
-
-class Script(str, Enum):
-    """Text script position."""
-
-    BASELINE = "baseline"
-    SUB = "sub"
-    SUPER = "super"
-
-
-class Formatting(BaseModel):
-    """Formatting."""
-
-    bold: bool = False
-    italic: bool = False
-    underline: bool = False
-    strikethrough: bool = False
-    script: Script = Script.BASELINE
-
-
-class TextItem(DocItem):
-    """TextItem."""
-
-    label: typing.Literal[
-        DocItemLabel.CAPTION,
-        DocItemLabel.CHECKBOX_SELECTED,
-        DocItemLabel.CHECKBOX_UNSELECTED,
-        DocItemLabel.FOOTNOTE,
-        DocItemLabel.PAGE_FOOTER,
-        DocItemLabel.PAGE_HEADER,
-        DocItemLabel.PARAGRAPH,
-        DocItemLabel.REFERENCE,
-        DocItemLabel.TEXT,
-        DocItemLabel.EMPTY_VALUE,
-    ]
-
-    orig: str  # untreated representation
-    text: str  # sanitized representation
-
-    formatting: Optional[Formatting] = None
-    hyperlink: Optional[Union[AnyUrl, Path]] = Field(union_mode="left_to_right", default=None)
-
-    @deprecated("Use export_to_doctags() instead.")
-    def export_to_document_tokens(self, *args, **kwargs):
-        r"""Export to DocTags format."""
-        return self.export_to_doctags(*args, **kwargs)
-
-    def export_to_doctags(
-        self,
-        doc: "DoclingDocument",
-        new_line: str = "",  # deprecated
-        xsize: int = 500,
-        ysize: int = 500,
-        add_location: bool = True,
-        add_content: bool = True,
-    ):
-        r"""Export text element to document tokens format.
-
-        :param doc: "DoclingDocument":
-        :param new_line: str (Default value = "")  Deprecated
-        :param xsize: int:  (Default value = 500)
-        :param ysize: int:  (Default value = 500)
-        :param add_location: bool:  (Default value = True)
-        :param add_content: bool:  (Default value = True)
-
-        """
-        from docling_core.transforms.serializer.doctags import (
-            DocTagsDocSerializer,
-            DocTagsParams,
-        )
-
-        serializer = DocTagsDocSerializer(
-            doc=doc,
-            params=DocTagsParams(
-                xsize=xsize,
-                ysize=ysize,
-                add_location=add_location,
-                add_content=add_content,
-            ),
-        )
-        text = serializer.serialize(item=self).text
-        return text
-
-
-class TitleItem(TextItem):
-    """TitleItem."""
-
-    label: typing.Literal[DocItemLabel.TITLE] = DocItemLabel.TITLE  # type: ignore[assignment]
-
-
-class SectionHeaderItem(TextItem):
-    """SectionItem."""
-
-    label: typing.Literal[DocItemLabel.SECTION_HEADER] = DocItemLabel.SECTION_HEADER  # type: ignore[assignment]
-    level: LevelNumber = 1
-
-    @deprecated("Use export_to_doctags() instead.")
-    def export_to_document_tokens(self, *args, **kwargs):
-        r"""Export to DocTags format."""
-        return self.export_to_doctags(*args, **kwargs)
-
-    def export_to_doctags(
-        self,
-        doc: "DoclingDocument",
-        new_line: str = "",  # deprecated
-        xsize: int = 500,
-        ysize: int = 500,
-        add_location: bool = True,
-        add_content: bool = True,
-    ):
-        r"""Export text element to document tokens format.
-
-        :param doc: "DoclingDocument":
-        :param new_line: str (Default value = "")  Deprecated
-        :param xsize: int:  (Default value = 500)
-        :param ysize: int:  (Default value = 500)
-        :param add_location: bool:  (Default value = True)
-        :param add_content: bool:  (Default value = True)
-
-        """
-        from docling_core.transforms.serializer.doctags import (
-            DocTagsDocSerializer,
-            DocTagsParams,
-        )
-
-        serializer = DocTagsDocSerializer(
-            doc=doc,
-            params=DocTagsParams(
-                xsize=xsize,
-                ysize=ysize,
-                add_location=add_location,
-                add_content=add_content,
-            ),
-        )
-        text = serializer.serialize(item=self).text
-        return text
-
-
-class ListItem(TextItem):
-    """SectionItem."""
-
-    label: typing.Literal[DocItemLabel.LIST_ITEM] = DocItemLabel.LIST_ITEM  # type: ignore[assignment]
-    enumerated: bool = False
-    marker: str = "-"  # The bullet or number symbol that prefixes this list item
-
-
-class FloatingItem(DocItem):
-    """FloatingItem."""
-
-    meta: Optional[FloatingMeta] = None
-
-    captions: list[RefItem] = []
-    references: list[RefItem] = []
-    footnotes: list[RefItem] = []
-    image: Optional[ImageRef] = None
-
-    def caption_text(self, doc: "DoclingDocument") -> str:
-        """Computes the caption as a single text."""
-        text = ""
-        for cap in self.captions:
-            text += cap.resolve(doc).text
-        return text
-
-    def get_image(self, doc: "DoclingDocument", prov_index: int = 0) -> Optional[PILImage.Image]:
-        """Returns the image corresponding to this FloatingItem.
-
-        This function returns the PIL image from self.image if one is available.
-        Otherwise, it uses DocItem.get_image to get an image of this FloatingItem.
-
-        In particular, when self.image is None, the function returns None if this
-        FloatingItem has no valid provenance or the doc does not contain a valid image
-        for the required page.
-        """
-        if self.image is not None:
-            return self.image.pil_image
-        return super().get_image(doc=doc, prov_index=prov_index)
-
-
-class CodeItem(FloatingItem, TextItem):
-    """CodeItem."""
-
-    label: typing.Literal[DocItemLabel.CODE] = DocItemLabel.CODE  # type: ignore[assignment]
-    code_language: CodeLanguageLabel = CodeLanguageLabel.UNKNOWN
-
-    @deprecated("Use export_to_doctags() instead.")
-    def export_to_document_tokens(self, *args, **kwargs):
-        r"""Export to DocTags format."""
-        return self.export_to_doctags(*args, **kwargs)
-
-    def export_to_doctags(
-        self,
-        doc: "DoclingDocument",
-        new_line: str = "",  # deprecated
-        xsize: int = 500,
-        ysize: int = 500,
-        add_location: bool = True,
-        add_content: bool = True,
-    ):
-        r"""Export text element to document tokens format.
-
-        :param doc: "DoclingDocument":
-        :param new_line: str (Default value = "")  Deprecated
-        :param xsize: int:  (Default value = 500)
-        :param ysize: int:  (Default value = 500)
-        :param add_location: bool:  (Default value = True)
-        :param add_content: bool:  (Default value = True)
-
-        """
-        from docling_core.transforms.serializer.doctags import (
-            DocTagsDocSerializer,
-            DocTagsParams,
-        )
-
-        serializer = DocTagsDocSerializer(
-            doc=doc,
-            params=DocTagsParams(
-                xsize=xsize,
-                ysize=ysize,
-                add_location=add_location,
-                add_content=add_content,
-            ),
-        )
-        text = serializer.serialize(item=self).text
-        return text
-
-
-class FormulaItem(TextItem):
-    """FormulaItem."""
-
-    label: typing.Literal[DocItemLabel.FORMULA] = DocItemLabel.FORMULA  # type: ignore[assignment]
-
-
-class MetaUtils:
-    """Metadata-related utilities."""
-
-    _META_FIELD_NAMESPACE_DELIMITER: Final = "__"
-    _META_FIELD_LEGACY_NAMESPACE: Final = "docling_legacy"
-
-    @classmethod
-    def create_meta_field_name(
-        cls,
-        *,
-        namespace: str,
-        name: str,
-    ) -> str:
-        """Create a meta field name."""
-        return f"{namespace}{cls._META_FIELD_NAMESPACE_DELIMITER}{name}"
-
-    @classmethod
-    def _create_migrated_meta_field_name(
-        cls,
-        *,
-        name: str,
-    ) -> str:
-        return cls.create_meta_field_name(namespace=cls._META_FIELD_LEGACY_NAMESPACE, name=name)
-
-
-class PictureItem(FloatingItem):
-    """PictureItem."""
-
-    label: typing.Literal[DocItemLabel.PICTURE, DocItemLabel.CHART] = DocItemLabel.PICTURE
-
-    meta: Optional[PictureMeta] = None
-    annotations: Annotated[
-        list[PictureDataType],
-        deprecated("Field `annotations` is deprecated; use `meta` instead."),
-    ] = []
-
-    @model_validator(mode="after")
-    def _migrate_annotations_to_meta(self) -> Self:
-        """Migrate the `annotations` field to `meta`."""
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=DeprecationWarning)
-
-            if self.annotations:
-                _logger.info(
-                    "Migrating deprecated `annotations` to `meta`; this will be removed in the future. "
-                    "Note that only the first available instance of each annotation type will be migrated."
-                )
-                for ann in self.annotations:
-                    # migrate annotations to meta
-
-                    # ensure meta field is present
-                    if self.meta is None:
-                        self.meta = PictureMeta()
-
-                    if isinstance(ann, PictureClassificationData) and self.meta.classification is None:
-                        self.meta.classification = PictureClassificationMetaField(
-                            predictions=[
-                                PictureClassificationPrediction(
-                                    class_name=pred.class_name,
-                                    confidence=pred.confidence,
-                                    created_by=ann.provenance,
-                                )
-                                for pred in ann.predicted_classes
-                            ],
-                        )
-                    elif isinstance(ann, DescriptionAnnotation) and self.meta.description is None:
-                        self.meta.description = DescriptionMetaField(
-                            text=ann.text,
-                            created_by=ann.provenance,
-                        )
-                    elif isinstance(ann, PictureMoleculeData) and self.meta.molecule is None:
-                        self.meta.molecule = MoleculeMetaField(
-                            smi=ann.smi,
-                            confidence=ann.confidence,
-                            created_by=ann.provenance,
-                            **{
-                                MetaUtils._create_migrated_meta_field_name(name="segmentation"): ann.segmentation,
-                                MetaUtils._create_migrated_meta_field_name(name="class_name"): ann.class_name,
-                            },
-                        )
-                    elif isinstance(ann, PictureTabularChartData) and self.meta.tabular_chart is None:
-                        self.meta.tabular_chart = TabularChartMetaField(
-                            title=ann.title,
-                            chart_data=ann.chart_data,
-                        )
-                    elif not isinstance(
-                        ann,
-                        PictureClassificationData
-                        | DescriptionAnnotation
-                        | PictureMoleculeData
-                        | PictureTabularChartData,
-                    ) and not hasattr(
-                        self.meta,
-                        MetaUtils.create_meta_field_name(
-                            namespace=MetaUtils._META_FIELD_LEGACY_NAMESPACE,
-                            name=ann.kind,
-                        ),
-                    ):
-                        self.meta.set_custom_field(
-                            namespace=MetaUtils._META_FIELD_LEGACY_NAMESPACE,
-                            name=ann.kind,
-                            value=(ann.content if isinstance(ann, MiscAnnotation) else ann.model_dump(mode="json")),
-                        )
-
-            return self
-
-    # Convert the image to Base64
-    def _image_to_base64(self, pil_image, format="PNG"):
-        """Base64 representation of the image."""
-        buffered = BytesIO()
-        pil_image.save(buffered, format=format)  # Save the image to the byte stream
-        img_bytes = buffered.getvalue()  # Get the byte data
-        img_base64 = base64.b64encode(img_bytes).decode("utf-8")  # Encode to Base64 and decode to string
-        return img_base64
-
-    @staticmethod
-    def _image_to_hexhash(img: Optional[PILImage.Image]) -> Optional[str]:
-        """Hexash from the image."""
-        if img is not None:
-            # Convert the image to raw bytes
-            image_bytes = img.tobytes()
-
-            # Create a hash object (e.g., SHA-256)
-            hasher = hashlib.sha256(usedforsecurity=False)
-
-            # Feed the image bytes into the hash object
-            hasher.update(image_bytes)
-
-            # Get the hexadecimal representation of the hash
-            return hasher.hexdigest()
-
-        return None
-
-    def export_to_markdown(
-        self,
-        doc: "DoclingDocument",
-        add_caption: bool = True,  # deprecated
-        image_mode: ImageRefMode = ImageRefMode.EMBEDDED,
-        image_placeholder: str = "<!-- image -->",
-    ) -> str:
-        """Export picture to Markdown format."""
-        from docling_core.transforms.serializer.markdown import (
-            MarkdownDocSerializer,
-            MarkdownParams,
-        )
-
-        if not add_caption:
-            _logger.warning(
-                "Argument `add_caption` is deprecated and will be ignored.",
-            )
-
-        serializer = MarkdownDocSerializer(
-            doc=doc,
-            params=MarkdownParams(
-                image_mode=image_mode,
-                image_placeholder=image_placeholder,
-            ),
-        )
-        text = serializer.serialize(item=self).text
-        return text
-
-    def export_to_html(
-        self,
-        doc: "DoclingDocument",
-        add_caption: bool = True,
-        image_mode: ImageRefMode = ImageRefMode.PLACEHOLDER,
-    ) -> str:
-        """Export picture to HTML format."""
-        from docling_core.transforms.serializer.html import (
-            HTMLDocSerializer,
-            HTMLParams,
-        )
-
-        serializer = HTMLDocSerializer(
-            doc=doc,
-            params=HTMLParams(
-                image_mode=image_mode,
-            ),
-        )
-        text = serializer.serialize(item=self).text
-        return text
-
-    @deprecated("Use export_to_doctags() instead.")
-    def export_to_document_tokens(self, *args, **kwargs):
-        r"""Export to DocTags format."""
-        return self.export_to_doctags(*args, **kwargs)
-
-    def export_to_doctags(
-        self,
-        doc: "DoclingDocument",
-        new_line: str = "",  # deprecated
-        xsize: int = 500,
-        ysize: int = 500,
-        add_location: bool = True,
-        add_caption: bool = True,
-        add_content: bool = True,  # not used at the moment
-    ):
-        r"""Export picture to document tokens format.
-
-        :param doc: "DoclingDocument":
-        :param new_line: str (Default value = "")  Deprecated
-        :param xsize: int:  (Default value = 500)
-        :param ysize: int:  (Default value = 500)
-        :param add_location: bool:  (Default value = True)
-        :param add_caption: bool:  (Default value = True)
-        :param add_content: bool:  (Default value = True)
-        :param # not used at the moment
-
-        """
-        from docling_core.transforms.serializer.doctags import (
-            DocTagsDocSerializer,
-            DocTagsParams,
-        )
-
-        serializer = DocTagsDocSerializer(
-            doc=doc,
-            params=DocTagsParams(
-                xsize=xsize,
-                ysize=ysize,
-                add_location=add_location,
-                add_content=add_content,
-                add_caption=add_caption,
-            ),
-        )
-        text = serializer.serialize(item=self).text
-        return text
-
-    def get_annotations(self) -> Sequence[BaseAnnotation]:
-        """Get the annotations of this PictureItem."""
-        return self.annotations
-
-
-TableAnnotationType = Annotated[
-    Union[
-        DescriptionAnnotation,
-        MiscAnnotation,
-    ],
-    Field(discriminator="kind"),
-]
-
-
-class TableItem(FloatingItem):
-    """TableItem."""
-
-    data: TableData
-    label: typing.Literal[
-        DocItemLabel.DOCUMENT_INDEX,
-        DocItemLabel.TABLE,
-    ] = DocItemLabel.TABLE
-
-    annotations: Annotated[
-        list[TableAnnotationType],
-        deprecated("Field `annotations` is deprecated; use `meta` instead."),
-    ] = []
-
-    @model_validator(mode="after")
-    def _migrate_annotations_to_meta(self) -> Self:
-        """Migrate the `annotations` field to `meta`."""
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=DeprecationWarning)
-
-            if self.annotations:
-                _logger.info(
-                    "Migrating deprecated `annotations` to `meta`; this will be removed in the future. "
-                    "Note that only the first available instance of each annotation type will be migrated."
-                )
-                for ann in self.annotations:
-                    # ensure meta field is present
-                    if self.meta is None:
-                        self.meta = FloatingMeta()
-
-                    if isinstance(ann, DescriptionAnnotation) and self.meta.description is None:
-                        self.meta.description = DescriptionMetaField(
-                            text=ann.text,
-                            created_by=ann.provenance,
-                        )
-                    elif not isinstance(ann, DescriptionAnnotation) and not hasattr(
-                        self.meta,
-                        MetaUtils.create_meta_field_name(
-                            namespace=MetaUtils._META_FIELD_LEGACY_NAMESPACE,
-                            name=ann.kind,
-                        ),
-                    ):
-                        self.meta.set_custom_field(
-                            namespace=MetaUtils._META_FIELD_LEGACY_NAMESPACE,
-                            name=ann.kind,
-                            value=(ann.content if isinstance(ann, MiscAnnotation) else ann.model_dump(mode="json")),
-                        )
-
-            return self
-
-    def export_to_dataframe(self, doc: Optional["DoclingDocument"] = None) -> pd.DataFrame:
-        """Export the table as a Pandas DataFrame."""
-
-        return self._export_to_dataframe_with_options(doc=doc)
-
-    def _export_to_dataframe_with_options(
-        self,
-        doc: Optional["DoclingDocument"] = None,
-        **kwargs: Any,
-    ) -> pd.DataFrame:
-        """Export the table as a Pandas DataFrame with contextual named arguments."""
-
-        if doc is None:
-            _logger.warning("Usage of TableItem.export_to_dataframe() without `doc` argument is deprecated.")
-
-        if self.data.num_rows == 0 or self.data.num_cols == 0:
-            return pd.DataFrame()
-
-        # Count how many rows are column headers
-        num_headers = 0
-        for i, row in enumerate(self.data.grid):
-            if len(row) == 0:
-                raise RuntimeError(f"Invalid table. {len(row)=} but {self.data.num_cols=}.")
-
-            any_header = False
-            for cell in row:
-                if cell.column_header:
-                    any_header = True
-                    break
-
-            if any_header:
-                num_headers += 1
-            else:
-                break
-
-        # Create the column names from all col_headers
-        columns: Optional[list[str]] = None
-        if num_headers > 0:
-            columns = ["" for _ in range(self.data.num_cols)]
-            for i in range(num_headers):
-                for j, cell in enumerate(self.data.grid[i]):
-                    col_name = cell._get_text(doc=doc, **kwargs)
-                    if columns[j] != "":
-                        col_name = f".{col_name}"
-                    columns[j] += col_name
-
-        # Create table data
-        table_data = [[cell._get_text(doc=doc, **kwargs) for cell in row] for row in self.data.grid[num_headers:]]
-
-        # Create DataFrame
-        table = pd.DataFrame(table_data, columns=columns)
-
-        return table
-
-    def export_to_markdown(self, doc: Optional["DoclingDocument"] = None) -> str:
-        """Export the table as markdown."""
-        if doc is not None:
-            from docling_core.transforms.serializer.markdown import (
-                MarkdownDocSerializer,
-            )
-
-            serializer = MarkdownDocSerializer(doc=doc)
-            text = serializer.serialize(item=self).text
-            return text
-        else:
-            _logger.warning(
-                "Usage of TableItem.export_to_markdown() without `doc` argument is deprecated.",
-            )
-
-            table = []
-            for row in self.data.grid:
-                tmp = []
-                for col in row:
-                    # make sure that md tables are not broken
-                    # due to newline chars in the text
-                    text = col._get_text(doc=doc)
-                    text = text.replace("\n", " ")
-                    tmp.append(text)
-
-                table.append(tmp)
-
-            res = ""
-            if len(table) > 1 and len(table[0]) > 0:
-                try:
-                    res = tabulate(table[1:], headers=table[0], tablefmt="github")
-                except ValueError:
-                    res = tabulate(
-                        table[1:],
-                        headers=table[0],
-                        tablefmt="github",
-                        disable_numparse=True,
-                    )
-
-        return res
-
-    def export_to_html(
-        self,
-        doc: Optional["DoclingDocument"] = None,
-        add_caption: bool = True,
-    ) -> str:
-        """Export the table as html."""
-        if doc is not None:
-            from docling_core.transforms.serializer.html import HTMLDocSerializer
-
-            serializer = HTMLDocSerializer(doc=doc)
-            text = serializer.serialize(item=self).text
-            return text
-        else:
-            _logger.error(
-                "Usage of TableItem.export_to_html() without `doc` argument is deprecated.",
-            )
-            return ""
-
-    def export_to_otsl(
-        self,
-        doc: "DoclingDocument",
-        add_cell_location: bool = True,
-        add_cell_text: bool = True,
-        xsize: int = 500,
-        ysize: int = 500,
-        self_closing: bool = False,
-        **kwargs: Any,
-    ) -> str:
-        """Export the table as OTSL."""
-        # Possible OTSL tokens...
-        #
-        # Empty and full cells:
-        # "ecel", "fcel"
-        #
-        # Cell spans (horisontal, vertical, 2d):
-        # "lcel", "ucel", "xcel"
-        #
-        # New line:
-        # "nl"
-        #
-        # Headers (column, row, section row):
-        # "ched", "rhed", "srow"
-
-        from docling_core.transforms.serializer.doctags import DocTagsDocSerializer
-
-        table_token = kwargs.get("table_token", TableToken)
-
-        doc_serializer = DocTagsDocSerializer(doc=doc)
-        body = []
-        nrows = self.data.num_rows
-        ncols = self.data.num_cols
-        if len(self.data.table_cells) == 0:
-            return ""
-
-        page_no = 0
-        if len(self.prov) > 0:
-            page_no = self.prov[0].page_no
-
-        for i in range(nrows):
-            for j in range(ncols):
-                cell: TableCell = self.data.grid[i][j]
-                content = cell._get_text(doc=doc, doc_serializer=doc_serializer, **kwargs).strip()
-                rowspan, rowstart = (
-                    cell.row_span,
-                    cell.start_row_offset_idx,
-                )
-                colspan, colstart = (
-                    cell.col_span,
-                    cell.start_col_offset_idx,
-                )
-
-                if len(doc.pages.keys()):
-                    page_w, page_h = doc.pages[page_no].size.as_tuple()
-                cell_loc = ""
-                if cell.bbox is not None:
-                    cell_loc = DocumentToken.get_location(
-                        bbox=cell.bbox.to_bottom_left_origin(page_h).as_tuple(),
-                        page_w=page_w,
-                        page_h=page_h,
-                        xsize=xsize,
-                        ysize=ysize,
-                        self_closing=self_closing,
-                    )
-
-                if rowstart == i and colstart == j:
-                    if len(content) > 0:
-                        if cell.column_header:
-                            body.append(str(table_token.OTSL_CHED.value))
-                        elif cell.row_header:
-                            body.append(str(table_token.OTSL_RHED.value))
-                        elif cell.row_section:
-                            body.append(str(table_token.OTSL_SROW.value))
-                        else:
-                            body.append(str(table_token.OTSL_FCEL.value))
-                        if add_cell_location:
-                            body.append(str(cell_loc))
-                        if add_cell_text:
-                            body.append(str(content))
-                    else:
-                        body.append(str(table_token.OTSL_ECEL.value))
-                else:
-                    add_cross_cell = False
-                    if rowstart != i:
-                        if colspan == 1:
-                            body.append(str(table_token.OTSL_UCEL.value))
-                        else:
-                            add_cross_cell = True
-                    if colstart != j:
-                        if rowspan == 1:
-                            body.append(str(table_token.OTSL_LCEL.value))
-                        else:
-                            add_cross_cell = True
-                    if add_cross_cell:
-                        body.append(str(table_token.OTSL_XCEL.value))
-            body.append(str(table_token.OTSL_NL.value))
-        body_str = "".join(body)
-        return body_str
-
-    @deprecated("Use export_to_doctags() instead.")
-    def export_to_document_tokens(self, *args, **kwargs):
-        r"""Export to DocTags format."""
-        return self.export_to_doctags(*args, **kwargs)
-
-    def export_to_doctags(
-        self,
-        doc: "DoclingDocument",
-        new_line: str = "",  # deprecated
-        xsize: int = 500,
-        ysize: int = 500,
-        add_location: bool = True,
-        add_cell_location: bool = True,
-        add_cell_text: bool = True,
-        add_caption: bool = True,
-    ):
-        r"""Export table to document tokens format.
-
-        :param doc: "DoclingDocument":
-        :param new_line: str (Default value = "")  Deprecated
-        :param xsize: int:  (Default value = 500)
-        :param ysize: int:  (Default value = 500)
-        :param add_location: bool:  (Default value = True)
-        :param add_cell_location: bool:  (Default value = True)
-        :param add_cell_text: bool:  (Default value = True)
-        :param add_caption: bool:  (Default value = True)
-
-        """
-        from docling_core.transforms.serializer.doctags import (
-            DocTagsDocSerializer,
-            DocTagsParams,
-        )
-
-        serializer = DocTagsDocSerializer(
-            doc=doc,
-            params=DocTagsParams(
-                xsize=xsize,
-                ysize=ysize,
-                add_location=add_location,
-                add_caption=add_caption,
-                add_table_cell_location=add_cell_location,
-                add_table_cell_text=add_cell_text,
-            ),
-        )
-        text = serializer.serialize(item=self).text
-        return text
-
-    @validate_call
-    def add_annotation(self, annotation: TableAnnotationType) -> None:
-        """Add an annotation to the table."""
-        self.annotations.append(annotation)
-
-    def get_annotations(self) -> Sequence[BaseAnnotation]:
-        """Get the annotations of this TableItem."""
-        return self.annotations
-
-
-class GraphCell(BaseModel):
-    """GraphCell."""
-
-    label: GraphCellLabel
-
-    cell_id: int
-
-    text: str  # sanitized text
-    orig: str  # text as seen on document
-
-    prov: Optional[ProvenanceItem] = None
-
-    # in case you have a text, table or picture item
-    item_ref: Optional[RefItem] = None
-
-
-class GraphLink(BaseModel):
-    """GraphLink."""
-
-    label: GraphLinkLabel
-
-    source_cell_id: int
-    target_cell_id: int
-
-
-class GraphData(BaseModel):
-    """GraphData."""
-
-    cells: list[GraphCell] = Field(default_factory=list)
-    links: list[GraphLink] = Field(default_factory=list)
-
-    @field_validator("links")
-    @classmethod
-    def validate_links(cls, links, info):
-        """Ensure that each link is valid."""
-        cells = info.data.get("cells", [])
-
-        valid_cell_ids = {cell.cell_id for cell in cells}
-
-        for link in links:
-            if link.source_cell_id not in valid_cell_ids:
-                raise ValueError(f"Invalid source_cell_id {link.source_cell_id} in GraphLink")
-            if link.target_cell_id not in valid_cell_ids:
-                raise ValueError(f"Invalid target_cell_id {link.target_cell_id} in GraphLink")
-
-        return links
-
-
-class KeyValueItem(FloatingItem):
-    """KeyValueItem."""
-
-    label: typing.Literal[DocItemLabel.KEY_VALUE_REGION] = DocItemLabel.KEY_VALUE_REGION
-
-    graph: GraphData
-
-    def export_to_document_tokens(
-        self,
-        doc: "DoclingDocument",
-        new_line: str = "",  # deprecated
-        xsize: int = 500,
-        ysize: int = 500,
-        add_location: bool = True,
-        add_content: bool = True,
-    ):
-        r"""Export key value item to document tokens format.
-
-        :param doc: "DoclingDocument":
-        :param new_line: str (Default value = "")  Deprecated
-        :param xsize: int:  (Default value = 500)
-        :param ysize: int:  (Default value = 500)
-        :param add_location: bool:  (Default value = True)
-        :param add_content: bool:  (Default value = True)
-
-        """
-        from docling_core.transforms.serializer.doctags import (
-            DocTagsDocSerializer,
-            DocTagsParams,
-        )
-
-        serializer = DocTagsDocSerializer(
-            doc=doc,
-            params=DocTagsParams(
-                xsize=xsize,
-                ysize=ysize,
-                add_location=add_location,
-                add_content=add_content,
-            ),
-        )
-        text = serializer.serialize(item=self).text
-        return text
-
-
-class FormItem(FloatingItem):
-    """FormItem."""
-
-    label: typing.Literal[DocItemLabel.FORM] = DocItemLabel.FORM
-
-    graph: GraphData
-
-
-ContentItem = Annotated[
-    Union[
-        TextItem,
-        TitleItem,
-        SectionHeaderItem,
-        ListItem,
-        CodeItem,
-        FormulaItem,
-        PictureItem,
-        TableItem,
-        KeyValueItem,
-    ],
-    Field(discriminator="label"),
-]
-
-
-class PageItem(BaseModel):
-    """PageItem."""
-
-    # A page carries separate root items for furniture and body,
-    # only referencing items on the page
-    size: Size
-    image: Optional[ImageRef] = None
-    page_no: int
 
 
 class DoclingDocument(BaseModel):
@@ -2580,7 +183,6 @@ class DoclingDocument(BaseModel):
         # This is optional, e.g. a DoclingDocument could also be entirely
         # generated from synthetic data.
     )
-
     furniture: Annotated[GroupItem, Field(deprecated=True)] = GroupItem(
         name="_root_",
         self_ref="#/furniture",
@@ -2589,13 +191,173 @@ class DoclingDocument(BaseModel):
     body: GroupItem = GroupItem(name="_root_", self_ref="#/body")  # List[RefItem] = []
 
     groups: list[Union[ListGroup, InlineGroup, GroupItem]] = []
-    texts: list[Union[TitleItem, SectionHeaderItem, ListItem, CodeItem, FormulaItem, TextItem]] = []
+    texts: list[
+        Union[
+            TitleItem,
+            SectionHeaderItem,
+            ListItem,
+            CodeItem,
+            FormulaItem,
+            FieldHeadingItem,
+            FieldValueItem,
+            TextItem,
+        ]
+    ] = []
     pictures: list[PictureItem] = []
     tables: list[TableItem] = []
     key_value_items: list[KeyValueItem] = []
     form_items: list[FormItem] = []
+    field_regions: list[FieldRegionItem] = []
+    field_items: list[FieldItem] = []
 
     pages: dict[int, PageItem] = {}  # empty as default
+
+    @model_serializer(mode="wrap")
+    def _custom_pydantic_serialize(self, handler: SerializerFunctionWrapHandler) -> dict:
+        dumped = handler(self)
+
+        # suppress serializing certain fields when empty:
+        for field in {"field_regions", "field_items"}:
+            if dumped.get(field) == []:
+                del dumped[field]
+
+        return dumped
+
+    @staticmethod
+    def _clamp_location_coordinate(
+        *,
+        value: float,
+        lo: float,
+        hi: float,
+        tolerance: float,
+        page_no: int,
+        bbox_label: str,
+        coord_name: str,
+    ) -> float:
+        clamped = min(max(value, lo), hi)
+        if clamped != value and abs(value - clamped) > tolerance:
+            if value < lo:
+                warnings.warn(
+                    f"{bbox_label} coordinate {coord_name} on page {page_no} is outside page bounds: "
+                    f"{value=} < {lo=}; clamping to {lo}",
+                    stacklevel=3,
+                )
+            else:
+                warnings.warn(
+                    f"{bbox_label} coordinate {coord_name} on page {page_no} is outside page bounds: "
+                    f"{value=} > {hi=}; clamping to {hi}",
+                    stacklevel=3,
+                )
+        return clamped
+
+    @classmethod
+    def _clamp_bbox_to_page(
+        cls,
+        *,
+        bbox: BoundingBox,
+        page_size: Size,
+        page_no: int,
+        bbox_label: str,
+    ) -> BoundingBox:
+        page_width = page_size.width
+        page_height = page_size.height
+
+        tolerance_factor = 1e-2
+
+        return bbox.model_copy(
+            update={
+                "l": cls._clamp_location_coordinate(
+                    value=bbox.l,
+                    lo=0.0,
+                    hi=page_width,
+                    tolerance=page_width * tolerance_factor,
+                    page_no=page_no,
+                    bbox_label=bbox_label,
+                    coord_name="l",
+                ),
+                "r": cls._clamp_location_coordinate(
+                    value=bbox.r,
+                    lo=0.0,
+                    hi=page_width,
+                    tolerance=page_width * tolerance_factor,
+                    page_no=page_no,
+                    bbox_label=bbox_label,
+                    coord_name="r",
+                ),
+                "t": cls._clamp_location_coordinate(
+                    value=bbox.t,
+                    lo=0.0,
+                    hi=page_height,
+                    tolerance=page_height * tolerance_factor,
+                    page_no=page_no,
+                    bbox_label=bbox_label,
+                    coord_name="t",
+                ),
+                "b": cls._clamp_location_coordinate(
+                    value=bbox.b,
+                    lo=0.0,
+                    hi=page_height,
+                    tolerance=page_height * tolerance_factor,
+                    page_no=page_no,
+                    bbox_label=bbox_label,
+                    coord_name="b",
+                ),
+            }
+        )
+
+    @classmethod
+    def _clamp_provenance_bbox_to_page(cls, *, prov: ProvenanceItem, page_size: Size) -> None:
+        prov.bbox = cls._clamp_bbox_to_page(
+            bbox=prov.bbox,
+            page_size=page_size,
+            page_no=prov.page_no,
+            bbox_label="Provenance bbox",
+        )
+
+    def _clamp_provenance_bboxes_to_pages(self) -> None:
+        def clamp_prov(prov: ProvenanceItem) -> None:
+            page = self.pages.get(prov.page_no)
+            if page is not None:
+                self._clamp_provenance_bbox_to_page(prov=prov, page_size=page.size)
+
+        def clamp_table_cell_bboxes(table: TableItem) -> None:
+            page_nos = {prov.page_no for prov in table.prov}
+            if len(page_nos) != 1:
+                return
+            page_no = next(iter(page_nos))
+            page = self.pages.get(page_no)
+            if page is None:
+                return
+
+            for cell in table.data.table_cells:
+                if cell.bbox is not None:
+                    cell.bbox = self._clamp_bbox_to_page(
+                        bbox=cell.bbox,
+                        page_size=page.size,
+                        page_no=page_no,
+                        bbox_label="Table cell bbox",
+                    )
+
+        item_lists: tuple[Iterable[NodeItem], ...] = (
+            self.texts,
+            self.pictures,
+            self.tables,
+            self.key_value_items,
+            self.form_items,
+            self.field_regions,
+            self.field_items,
+        )
+        for item_list in item_lists:
+            for item in item_list:
+                if isinstance(item, DocItem):
+                    for prov in item.prov:
+                        clamp_prov(prov)
+                if isinstance(item, TableItem):
+                    clamp_table_cell_bboxes(item)
+                if isinstance(item, KeyValueItem | FormItem):
+                    for cell in item.graph.cells:
+                        if cell.prov is not None:
+                            clamp_prov(cell.prov)
 
     @model_validator(mode="before")
     @classmethod
@@ -2612,6 +374,395 @@ class DoclingDocument(BaseModel):
                 ]:
                     item["content_layer"] = "furniture"
         return data
+
+    def _create_pos_by_cell_id(self, graph: GraphData) -> dict[int, int]:
+        return {cell.cell_id: idx for idx, cell in enumerate(graph.cells)}
+
+    def _migrate_to_field_regions(self) -> None:
+        has_single_kv_item = len(self.key_value_items) == 1
+        last_item_is_kv_item = False
+        found_last_kv_item = False
+        if has_single_kv_item:
+            for item, _ in self.iterate_items(
+                with_groups=True,
+                traverse_pictures=True,
+                included_content_layers=set(ContentLayer),
+            ):
+                if found_last_kv_item:
+                    last_item_is_kv_item = False
+                    break
+                elif item == self.key_value_items[0]:
+                    found_last_kv_item = True
+                    last_item_is_kv_item = True
+
+        is_annot_case = has_single_kv_item and last_item_is_kv_item
+        if is_annot_case:
+            self._migrate_annot_forms_to_field_regions(self.key_value_items[0])
+            self._post_migration_cleanup()
+        else:
+            to_delete: list[NodeItem] = []
+
+            for item, _ in self.iterate_items():
+                if isinstance(item, FormItem | KeyValueItem):
+                    pos_by_cell_id = self._create_pos_by_cell_id(item.graph)
+                    to_delete.append(item)
+
+                    visited: set[str] = set()
+                    outgoing_links: dict[int, list[int]] = {}
+
+                    kvm = FieldRegionItem(
+                        self_ref="#",
+                        prov=item.prov,
+                        content_layer=item.content_layer,
+                        meta=item.meta,
+                        comments=item.comments,
+                        source=item.source,
+                    )
+                    self.insert_item_after_sibling(new_item=kvm, sibling=item)
+
+                    for link in item.graph.links:
+                        if link.label == GraphLinkLabel.TO_VALUE:
+                            key_cell = item.graph.cells[pos_by_cell_id[link.source_cell_id]]
+                            value_cell = item.graph.cells[pos_by_cell_id[link.target_cell_id]]
+                        elif link.label == GraphLinkLabel.TO_KEY:
+                            value_cell = item.graph.cells[pos_by_cell_id[link.source_cell_id]]
+                            key_cell = item.graph.cells[pos_by_cell_id[link.target_cell_id]]
+
+                        # check if we have already seen this key-value pair
+                        if (key_val_id := f"{key_cell.cell_id}-{value_cell.cell_id}") not in visited:
+                            visited.add(key_val_id)
+                            outgoing_links.setdefault(key_cell.cell_id, []).append(value_cell.cell_id)
+
+                    for key_cell_id, value_cell_ids in outgoing_links.items():
+                        kve = self.add_field_item(parent=kvm)
+                        key_cell = item.graph.cells[pos_by_cell_id[key_cell_id]]
+                        self.add_field_key(
+                            text=key_cell.text,
+                            parent=kve,
+                            prov=key_cell.prov,
+                        )
+                        for value_cell_id in value_cell_ids:
+                            value_cell = item.graph.cells[pos_by_cell_id[value_cell_id]]
+                            self.add_field_value(
+                                text=value_cell.text,
+                                parent=kve,
+                                prov=value_cell.prov,
+                            )
+
+            self.delete_items(node_items=to_delete)
+
+        self._normalize_references()
+
+    class _KVMigrData(BaseModel):
+        value_crefs: list[str] = []
+        key_cell: GraphCell = GraphCell(label=GraphCellLabel.KEY, cell_id=0, text="", orig="")
+        value_cells: list[GraphCell] = []
+
+    def _serialize_prov(self, prov: ProvenanceItem) -> str:
+        return f"{prov.page_no},{prov.bbox.l},{prov.bbox.t},{prov.bbox.r},{prov.bbox.b},{prov.bbox.coord_origin.value}"
+
+    def _provs_match(self, prov1: ProvenanceItem, prov2: ProvenanceItem, iou_threshold: float = 0.01) -> bool:
+        if prov1.page_no != prov2.page_no or prov1.bbox.coord_origin != prov2.bbox.coord_origin:
+            return False  # TODO: can normalize and compare but needs page size
+        return prov1.bbox.intersection_over_union(other=prov2.bbox, eps=0.0) > iou_threshold
+
+    def _build_prov_index(self, kvi: KeyValueItem, pos_by_cell_id: dict[int, int]) -> dict[str, Optional[NodeItem]]:
+        visited: set[str] = set()
+        prov_index: dict[str, NodeItem | None] = {}
+        text_index: dict[str, str | None] = {}
+        for link in kvi.graph.links:
+            if link.label not in {GraphLinkLabel.TO_VALUE, GraphLinkLabel.TO_KEY}:
+                continue
+            key_cell = (
+                kvi.graph.cells[pos_by_cell_id[link.source_cell_id]]
+                if link.label == GraphLinkLabel.TO_VALUE
+                else kvi.graph.cells[pos_by_cell_id[link.target_cell_id]]
+            )
+            value_cell = (
+                kvi.graph.cells[pos_by_cell_id[link.target_cell_id]]
+                if link.label == GraphLinkLabel.TO_VALUE
+                else kvi.graph.cells[pos_by_cell_id[link.source_cell_id]]
+            )
+            # check if we have already seen this key-value pair
+            if (
+                key_cell.prov
+                and value_cell.prov
+                and (key_val_id := f"{key_cell.cell_id}-{value_cell.cell_id}") not in visited
+            ):
+                visited.add(key_val_id)
+
+                for item, _ in self.iterate_items(
+                    with_groups=True, traverse_pictures=True, included_content_layers=set(ContentLayer)
+                ):
+                    if isinstance(item, DocItem) and item.prov:
+                        if self._provs_match(item.prov[0], key_cell.prov):
+                            serialized_prov = self._serialize_prov(key_cell.prov)
+                            prov_index[serialized_prov] = item
+                            text_index[key_cell.text] = (
+                                item.self_ref + "|" + (item.text if isinstance(item, TextItem) else "")
+                            )
+                        if self._provs_match(item.prov[0], value_cell.prov):
+                            serialized_prov = self._serialize_prov(value_cell.prov)
+                            prov_index[serialized_prov] = item
+                            text_index[value_cell.text] = (
+                                item.self_ref + "|" + (item.text if isinstance(item, TextItem) else "")
+                            )
+        return prov_index
+
+    def _find_node_by_prov(self, prov: ProvenanceItem, prov_index: dict[str, NodeItem | None]) -> NodeItem | None:
+        val = prov_index.get(self._serialize_prov(prov))
+        if val is not None:
+            pass
+        return val
+
+    def _build_kv_migration_index(self, kvi: KeyValueItem) -> dict[str, dict[int, "DoclingDocument._KVMigrData"]]:
+        outgoing_links: dict[str, dict[int, DoclingDocument._KVMigrData]] = {}
+        visited: set[str] = set()
+        pos_by_cell_id = self._create_pos_by_cell_id(kvi.graph)
+        prov_index = self._build_prov_index(kvi, pos_by_cell_id)
+
+        for link in kvi.graph.links:
+            key_cell = (
+                kvi.graph.cells[pos_by_cell_id[link.source_cell_id]]
+                if link.label == GraphLinkLabel.TO_VALUE
+                else kvi.graph.cells[pos_by_cell_id[link.target_cell_id]]
+            )
+            value_cell = (
+                kvi.graph.cells[pos_by_cell_id[link.target_cell_id]]
+                if link.label == GraphLinkLabel.TO_VALUE
+                else kvi.graph.cells[pos_by_cell_id[link.source_cell_id]]
+            )
+            # check if we have already seen this key-value pair
+            if (key_val_id := f"{key_cell.cell_id}-{value_cell.cell_id}") not in visited:
+                key_item_ref = key_cell.item_ref or (
+                    node.get_ref()
+                    if key_cell.prov and (node := self._find_node_by_prov(key_cell.prov, prov_index))
+                    else None
+                )
+                val_item_ref = value_cell.item_ref or (
+                    node.get_ref()
+                    if value_cell.prov and (node := self._find_node_by_prov(value_cell.prov, prov_index))
+                    else None
+                )
+                if key_item_ref and val_item_ref:
+                    visited.add(key_val_id)
+
+                    migr_data = outgoing_links.setdefault(key_item_ref.cref, {})
+                    migr_data.setdefault(key_cell.cell_id, DoclingDocument._KVMigrData())
+                    migr_data[key_cell.cell_id].value_crefs.append(val_item_ref.cref)
+                    migr_data[key_cell.cell_id].key_cell = key_cell
+                    migr_data[key_cell.cell_id].value_cells.append(value_cell)
+
+        return outgoing_links
+
+    def _eq_prov(self, prov1: ProvenanceItem, prov2: ProvenanceItem) -> bool:
+        """Compare provenances while tolerating charspan discrepancies."""
+        return prov1.bbox == prov2.bbox and prov1.page_no == prov2.page_no
+
+    def _migrate_annot_forms_to_field_regions(self, kvi: KeyValueItem) -> None:
+        to_delete: list[NodeItem] = [kvi]
+        outgoing_links = self._build_kv_migration_index(kvi)
+
+        for key_cref, key_cell_dict in outgoing_links.items():
+            existing_key_item = RefItem(cref=key_cref).resolve(doc=self)
+            fri = FieldRegionItem(self_ref="#")
+
+            if ex_key_item_is_li := isinstance(existing_key_item, ListItem):
+                self.append_child_item(child=fri, parent=existing_key_item)
+            else:
+                self._shift_down(old_subroot=existing_key_item, new_subroot=fri)
+
+            for _, migr_data_item in key_cell_dict.items():
+                reuse_existing_key_item = False
+
+                cell_and_ex_key_item_provs_equal = (
+                    migr_data_item.key_cell.prov
+                    and isinstance(existing_key_item, DocItem)
+                    and existing_key_item.prov
+                    and self._eq_prov(migr_data_item.key_cell.prov, existing_key_item.prov[0])
+                )
+
+                if len(key_cell_dict) == 1 and (
+                    migr_data_item.key_cell.prov is None or cell_and_ex_key_item_provs_equal
+                ):
+                    reuse_existing_key_item = True
+
+                key_prov = (
+                    migr_data_item.key_cell.prov
+                    if migr_data_item.key_cell.prov
+                    else (existing_key_item.prov[0] if existing_key_item.prov else None)
+                )
+
+                if reuse_existing_key_item:
+                    key_item = existing_key_item
+                else:  # case where single key_cref maps to multiple key cells
+                    if isinstance(existing_key_item, TextItem):
+                        existing_key_item.text = ""
+                    key_item = self.add_text(  # temporary item
+                        label=DocItemLabel.TEXT,
+                        text=migr_data_item.key_cell.text,
+                        parent=existing_key_item,
+                        prov=key_prov,
+                    )
+                skip_ki_deletion = key_item in to_delete
+
+                fi = self.add_field_item(parent=fri)
+                if isinstance(key_item, TextItem):
+                    self.add_field_key(text=migr_data_item.key_cell.text or key_item.text, parent=fi, prov=key_prov)
+                    if isinstance(key_item, ListItem):
+                        skip_ki_deletion = True
+                        key_item.text = ""
+                        if cell_and_ex_key_item_provs_equal:
+                            key_item.prov = []
+                elif isinstance(key_item, PictureItem):
+                    fk = self.add_field_key(text=migr_data_item.key_cell.text, parent=fi, prov=key_prov)
+                    if not key_item.children:
+                        self.append_child_item(child=key_item.model_copy(deep=True), parent=fk)
+                    else:
+                        skip_ki_deletion = True
+                else:
+                    continue  # TODO: handle other key item types
+
+                for idx, value_cref in enumerate(migr_data_item.value_crefs):
+                    value_item: NodeItem = RefItem(cref=value_cref).resolve(doc=self)
+                    # giving priority to the provenance from the graph cells
+                    value_prov = migr_data_item.value_cells[idx].prov or (
+                        value_item.prov[0] if isinstance(value_item, DocItem) and value_item.prov else None
+                    )
+                    skip_vi_deletion = value_item in to_delete
+                    if isinstance(value_item, TextItem):
+                        # giving priority to the text from the graph cells
+                        value_text = migr_data_item.value_cells[idx].text or value_item.text
+                        if value_item.label in {DocItemLabel.CHECKBOX_SELECTED, DocItemLabel.CHECKBOX_UNSELECTED}:
+                            if not value_item.children:
+                                fv = self.add_field_value(text="", parent=fi)
+                                new_text_item = value_item.model_copy(deep=True)
+                                new_text_item.prov = [value_prov] if value_prov else []
+                                new_text_item.text = value_text
+                                self.append_child_item(child=new_text_item, parent=fv)
+                            else:
+                                skip_vi_deletion = True
+                        else:
+                            fv = self.add_field_value(text=value_text, parent=fi, prov=value_prov)
+                            if value_item.label == DocItemLabel.EMPTY_VALUE:
+                                fv.kind = "fillable"
+
+                        if isinstance(value_item, ListItem):
+                            skip_vi_deletion = True
+                    elif isinstance(value_item, PictureItem):
+                        fv = self.add_field_value(text=migr_data_item.value_cells[idx].text, parent=fi, prov=value_prov)
+                        if not value_item.children:
+                            self.append_child_item(child=value_item.model_copy(deep=True), parent=fv)
+                        else:
+                            skip_vi_deletion = True
+                    else:
+                        continue  # TODO: handle other value item types
+
+                    if not skip_vi_deletion:
+                        to_delete.append(value_item)
+                if not skip_ki_deletion:
+                    to_delete.append(key_item)
+
+                if existing_key_item.prov and not cell_and_ex_key_item_provs_equal and not ex_key_item_is_li:
+                    fi.prov = existing_key_item.prov
+
+        self.delete_items(node_items=to_delete)
+
+    def _has_field_region_ancestor(self, item: NodeItem) -> bool:
+        while item.parent is not None:
+            item = item.parent.resolve(doc=self)
+            if isinstance(item, FieldRegionItem):
+                return True
+        return False
+
+    def _post_migration_cleanup(self) -> None:
+        # replace kv-associated form items with field region items
+        to_shift_up: list[NodeItem] = []
+        to_replace_with_fri: list[FormItem] = []
+        for fri in self.field_regions:
+            form_ancestor: FormItem | None = None
+            curr: NodeItem = fri
+            while True:
+                if isinstance(curr, FormItem):
+                    form_ancestor = curr
+                    break
+                elif curr.parent is None:
+                    break
+                curr = curr.parent.resolve(doc=self)
+            if form_ancestor is not None:
+                to_shift_up.append(fri)
+                if form_ancestor not in to_replace_with_fri:
+                    to_replace_with_fri.append(form_ancestor)
+        for form_item in to_replace_with_fri:
+            self._shift_down(
+                old_subroot=form_item,
+                new_subroot=FieldRegionItem(
+                    self_ref="#",
+                    prov=form_item.prov,
+                    content_layer=form_item.content_layer,
+                    meta=form_item.meta,
+                    comments=form_item.comments,
+                    source=form_item.source,
+                ),
+            )
+            self._shift_up(old_subroot=form_item)
+        for node in to_shift_up:
+            self._shift_up(old_subroot=node)
+
+        # handle any remaining (just value-associated) form items:
+        value_groups: list[tuple[NodeItem, list[TextItem]]] = []  # tracking consecutive non-migrated values
+        for outer, _ in self.iterate_items(
+            with_groups=True, traverse_pictures=True, included_content_layers=set(ContentLayer)
+        ):
+            if isinstance(outer, DocItem | GroupItem) and outer.label in {GroupLabel.FORM_AREA, DocItemLabel.FORM}:
+                prev_is_value = False
+                prev_level = -1
+                for inner, level in self.iterate_items(
+                    root=outer, with_groups=True, traverse_pictures=True, included_content_layers=set(ContentLayer)
+                ):
+                    if (
+                        isinstance(inner, TextItem)
+                        and inner.label
+                        in [DocItemLabel.EMPTY_VALUE, DocItemLabel.CHECKBOX_SELECTED, DocItemLabel.CHECKBOX_UNSELECTED]
+                        and not (inner.parent and isinstance(inner.parent.resolve(doc=self), FieldValueItem))
+                    ):
+                        if prev_is_value and level == prev_level:
+                            a, b = value_groups[-1]
+                            value_groups[-1] = a, b + [inner]
+                        else:
+                            value_groups.append((outer, [inner]))
+                        prev_is_value = True
+                    else:
+                        prev_is_value = False
+                    prev_level = level
+
+        already_shifted: list[NodeItem] = []
+        for outer, vg in value_groups:
+            if outer not in already_shifted:
+                already_shifted.append(outer)
+                if not self._has_field_region_ancestor(item=outer):
+                    fri = FieldRegionItem(self_ref="#")
+                    if isinstance(outer, DocItem):
+                        fri.prov = outer.prov
+                    self._shift_down(old_subroot=outer, new_subroot=fri)
+                self._shift_up(old_subroot=outer)
+
+            fi = FieldItem(self_ref="#")
+            self.insert_item_before_sibling(new_item=fi, sibling=vg[0])
+            for value_item in vg:
+                fv = FieldValueItem(self_ref="#", orig="", text="")
+                self._shift_down(old_subroot=value_item, new_subroot=fv)
+                self._move_subtree(old_subroot=fv, new_subroot=fi)
+
+        # handle any remaining form areas:
+        to_shift_up = []
+        for outer, _ in self.iterate_items(
+            with_groups=True, traverse_pictures=True, included_content_layers=set(ContentLayer)
+        ):
+            if isinstance(outer, GroupItem) and outer.label == GroupLabel.FORM_AREA:
+                to_shift_up.append(outer)
+        for node in to_shift_up:
+            self._shift_up(old_subroot=node)
 
     # ---------------------------
     # Public Manipulation methods
@@ -2759,6 +910,28 @@ class DoclingDocument(BaseModel):
             item.parent = parent_ref
 
             self.form_items.append(item)
+
+        elif isinstance(item, FieldRegionItem):
+            item_label = "field_regions"
+            item_index = len(self.field_regions)
+
+            cref = f"#/{item_label}/{item_index}"
+
+            item.self_ref = cref
+            item.parent = parent_ref
+
+            self.field_regions.append(item)
+
+        elif isinstance(item, FieldItem):
+            item_label = "field_items"
+            item_index = len(self.field_items)
+
+            cref = f"#/{item_label}/{item_index}"
+
+            item.self_ref = cref
+            item.parent = parent_ref
+
+            self.field_items.append(item)
 
         elif isinstance(item, ListGroup | InlineGroup):
             item_label = "groups"
@@ -2979,6 +1152,173 @@ class DoclingDocument(BaseModel):
             node = child_ref.resolve(self)
             self._update_breadth_first_with_lookup(node=node, refs_to_be_deleted=refs_to_be_deleted, lookup=lookup)
 
+    def _shift_up(self, *, old_subroot: NodeItem) -> None:
+        """Move a subtree up in the document tree, removing the old subroot.
+
+        :param old_subroot: The root of the subtree to move up (NodeItem should be part of the document tree)
+        :return: None
+        """
+        if old_subroot.parent is None:
+            raise ValueError("Can not shift up the root")
+
+        # use old subroot's parent as new subroot
+        new_subroot: NodeItem = old_subroot.parent.resolve(doc=self)
+
+        old_subr_idx = new_subroot.children.index(old_subroot.get_ref())
+        for i, child_ref in enumerate(old_subroot.children):
+            # link new subroot => children (right after the old subroot)
+            new_subroot.children.insert(old_subr_idx + i + 1, child_ref)
+
+            # link children => new subroot
+            child: NodeItem = child_ref.resolve(doc=self)
+            child.parent = new_subroot.get_ref()
+
+        # unlink old subroot its parent
+        new_subroot.children.remove(old_subroot.get_ref())
+
+    def _shift_down(self, *, old_subroot: NodeItem, new_subroot: NodeItem) -> None:
+        """Move a subtree down in the document tree, introducing a new subroot.
+
+        :param old_subroot: The subtree to move down (NodeItem must be part of the document tree)
+        :param new_subroot: The new subroot to introduce (NodeItem must not be part of the document tree)
+        :return: None
+        """
+        if old_subroot.parent is None:
+            raise ValueError("Can not shift down the root")
+
+        self.insert_item_before_sibling(new_item=new_subroot, sibling=old_subroot)
+
+        self._move_subtree(old_subroot=old_subroot, new_subroot=new_subroot)
+
+    def _move_subtree(self, *, old_subroot: NodeItem, new_subroot: NodeItem, pos: int | None = None) -> None:
+        """Move a subtree to a new parent."""
+        if old_subroot.parent is None:
+            raise ValueError("Can not move the root")
+
+        # unlink old subroot from its previous parent
+        previous_parent: NodeItem = old_subroot.parent.resolve(doc=self)
+        previous_parent.children.remove(old_subroot.get_ref())
+
+        # link new subroot => old subroot
+        if pos is not None:
+            new_subroot.children.insert(pos, old_subroot.get_ref())
+        else:
+            new_subroot.children.append(old_subroot.get_ref())
+
+        # link old subroot => new subroot
+        old_subroot.parent = new_subroot.get_ref()
+
+    def _get_heading_level(self, node: NodeItem) -> Optional[int]:
+        """Get the level of a node if it has heading semantics (TitleItem, SectionHeaderItem or root), else None."""
+        if isinstance(node, TitleItem):
+            return 0
+        elif isinstance(node, SectionHeaderItem):
+            return node.level
+        elif node == self.body:
+            return -1
+        else:
+            return None
+
+    def _is_descendant_of(self, node1: NodeItem, node2: NodeItem) -> bool:
+        """Check if node1 is a descendant of node2."""
+        curr = node1
+        while curr.parent is not None:
+            curr = curr.parent.resolve(doc=self)
+            if curr == node2:
+                return True
+        return False
+
+    def _hierarchize(self):
+        """Structure the document's titles and headings into an explicit hierarchy based on their levels."""
+        section_root_by_level: dict[int, Union[TitleItem, SectionHeaderItem]] = {-1: self.body}
+        resume_node: Optional[NodeItem] = self.body
+
+        while resume_node:
+            for item, _ in self.iterate_items(
+                with_groups=True, traverse_pictures=True, included_content_layers=set(ContentLayer)
+            ):
+                # mechanism for resuming the traversal from a desired node
+                if resume_node:
+                    if item != resume_node:
+                        continue
+                    else:
+                        resume_node = None
+
+                # Skip items that are descendants of FloatingItem containers (tables, pictures, key-values, forms)
+                # These have structural parent-child relationships that must be preserved:
+                if item.parent:
+                    curr = item
+                    is_floating_descendant = False
+                    while curr.parent is not None:
+                        parent = curr.parent.resolve(doc=self)
+                        if isinstance(parent, FloatingItem):
+                            is_floating_descendant = True
+                            break
+                        curr = parent
+
+                    if is_floating_descendant:
+                        continue
+
+                # determine which section root this item should belong to
+                introduced_level = self._get_heading_level(node=item)
+                target_root_level = -1
+                for level in section_root_by_level.keys():
+                    if level > target_root_level and (introduced_level is None or level < introduced_level):
+                        target_root_level = level
+                target_section_root = section_root_by_level[target_root_level]
+
+                # ensure the item is hooked to the target root
+                if item.parent and not self._is_descendant_of(node1=item, node2=target_section_root):
+                    # print(f"Will move {item.self_ref=} to {target_root.self_ref=}")
+                    self._move_subtree(old_subroot=item, new_subroot=target_section_root)
+                    # in case of moving, restart traversal from the right place in the updated tree
+                    resume_node = item
+                    break
+
+                if introduced_level is not None:  # i.e. a heading was found
+                    # remove shadowed headings
+                    keys_to_delete = [k for k in section_root_by_level if k >= introduced_level]
+                    for k in keys_to_delete:
+                        del section_root_by_level[k]
+                    section_root_by_level[introduced_level] = item
+
+    def _flatten(self):
+        """Flatten the document's titles and headings into a single level."""
+        resume_node: Optional[NodeItem] = self.body
+
+        while resume_node:
+            for item, _ in self.iterate_items(
+                with_groups=True, traverse_pictures=True, included_content_layers=set(ContentLayer)
+            ):
+                # mechanism for resuming the traversal from a desired node
+                if resume_node:
+                    if item != resume_node:
+                        continue
+                    else:
+                        resume_node = None
+
+                if isinstance(item, TitleItem | SectionHeaderItem):
+                    child_refs_to_move = [
+                        child_ref
+                        for idx, child_ref in enumerate(item.children)
+                        if not (  # don't move inline groups that capture the actual heading text (e.g. rich)
+                            item.text == "" and idx == 0 and isinstance(child_ref.resolve(doc=self), InlineGroup)
+                        )
+                    ]
+                    if child_refs_to_move:
+                        self._shift_down(
+                            old_subroot=item,
+                            new_subroot=GroupItem(self_ref="#"),
+                        )
+                        tmp_node = item.parent.resolve(doc=self)
+
+                        for child_ref in child_refs_to_move:
+                            child = child_ref.resolve(doc=self)
+                            self._move_subtree(old_subroot=child, new_subroot=tmp_node)
+                        self._shift_up(old_subroot=tmp_node)
+                        resume_node = item
+                        break
+
     ###################################
     # TODO: refactor add* methods below
     ###################################
@@ -3160,6 +1500,7 @@ class DoclingDocument(BaseModel):
         hyperlink: Optional[Union[AnyUrl, Path]] = None,
         *,
         source: Optional[SourceType] = None,
+        **kwargs: Any,
     ):
         """add_text.
 
@@ -3198,12 +1539,12 @@ class DoclingDocument(BaseModel):
             return self.add_heading(
                 text=text,
                 orig=orig,
-                # NOTE: we do not / cannot pass the level here, lossy path..
                 prov=prov,
                 parent=parent,
                 content_layer=content_layer,
                 formatting=formatting,
                 hyperlink=hyperlink,
+                **kwargs,
             )
 
         elif label in [DocItemLabel.CODE]:
@@ -3225,6 +1566,28 @@ class DoclingDocument(BaseModel):
                 content_layer=content_layer,
                 formatting=formatting,
                 hyperlink=hyperlink,
+            )
+        elif label in [DocItemLabel.FIELD_HEADING]:
+            return self.add_field_heading(
+                text=text,
+                orig=orig,
+                prov=prov,
+                parent=parent,
+                content_layer=content_layer,
+                formatting=formatting,
+                hyperlink=hyperlink,
+                **kwargs,
+            )
+        elif label in [DocItemLabel.FIELD_VALUE]:
+            return self.add_field_value(
+                text=text,
+                orig=orig,
+                prov=prov,
+                parent=parent,
+                content_layer=content_layer,
+                formatting=formatting,
+                hyperlink=hyperlink,
+                **kwargs,
             )
 
         else:
@@ -3626,6 +1989,254 @@ class DoclingDocument(BaseModel):
         parent.children.append(RefItem(cref=cref))
 
         return form_item
+
+    def add_field_region(
+        self,
+        prov: Optional[ProvenanceItem] = None,
+        parent: Optional[NodeItem] = None,
+    ) -> FieldRegionItem:
+        """add_field_region.
+
+        :param prov: Optional[ProvenanceItem]:  (Default value = None)
+        :param parent: Optional[NodeItem]:  (Default value = None)
+        """
+        if not parent:
+            parent = self.body
+
+        key_value_index = len(self.field_regions)
+        cref = f"#/field_regions/{key_value_index}"
+
+        kv_item = FieldRegionItem(
+            self_ref=cref,
+            parent=parent.get_ref(),
+        )
+        if prov:
+            kv_item.prov.append(prov)
+
+        self.field_regions.append(kv_item)
+        parent.children.append(RefItem(cref=cref))
+
+        return kv_item
+
+    def add_field_heading(
+        self,
+        text: str,
+        orig: Optional[str] = None,
+        level: LevelNumber = 1,
+        prov: Optional[ProvenanceItem] = None,
+        parent: Optional[NodeItem] = None,
+        content_layer: Optional[ContentLayer] = None,
+        formatting: Optional[Formatting] = None,
+        hyperlink: Optional[Union[AnyUrl, Path]] = None,
+    ):
+        """add_kv_heading.
+
+        :param label: DocItemLabel:
+        :param text: str:
+        :param orig: Optional[str]:  (Default value = None)
+        :param level: LevelNumber:  (Default value = 1)
+        :param prov: Optional[ProvenanceItem]:  (Default value = None)
+        :param parent: Optional[NodeItem]:  (Default value = None)
+        :param content_layer: Optional[ContentLayer]:  (Default value = None)
+        :param formatting: Optional[Formatting]:  (Default value = None)
+        :param hyperlink: Optional[Union[AnyUrl, Path]]:  (Default value = None)
+        """
+        if not parent:
+            parent = self.body
+
+        if not orig:
+            orig = text
+
+        text_index = len(self.texts)
+        cref = f"#/texts/{text_index}"
+        item = FieldHeadingItem(
+            level=level,
+            text=text,
+            orig=orig,
+            self_ref=cref,
+            parent=parent.get_ref(),
+            formatting=formatting,
+            hyperlink=hyperlink,
+        )
+        if prov:
+            item.prov.append(prov)
+        if content_layer:
+            item.content_layer = content_layer
+
+        self.texts.append(item)
+        parent.children.append(RefItem(cref=cref))
+
+        return item
+
+    def add_field_item(
+        self,
+        prov: Optional[ProvenanceItem] = None,
+        parent: Optional[NodeItem] = None,
+        content_layer: Optional[ContentLayer] = None,
+    ) -> FieldItem:
+        """add_kv_entry."""
+        _parent = parent or self.body
+        cref = f"#/field_items/{len(self.field_items)}"
+        item = FieldItem(
+            self_ref=cref,
+            parent=_parent.get_ref(),
+        )
+        if prov:
+            item.prov.append(prov)
+        if content_layer:
+            item.content_layer = content_layer
+
+        self.field_items.append(item)
+        _parent.children.append(RefItem(cref=cref))
+        return item
+
+    def add_field_key(
+        self,
+        text: str,
+        orig: Optional[str] = None,
+        prov: Optional[ProvenanceItem] = None,
+        parent: Optional[NodeItem] = None,
+        content_layer: Optional[ContentLayer] = None,
+        formatting: Optional[Formatting] = None,
+        hyperlink: Optional[Union[AnyUrl, Path]] = None,
+    ):
+        """add_field_key.
+
+        :param label: DocItemLabel:
+        :param text: str:
+        :param orig: Optional[str]:  (Default value = None)
+        :param prov: Optional[ProvenanceItem]:  (Default value = None)
+        :param parent: Optional[NodeItem]:  (Default value = None)
+        :param content_layer: Optional[ContentLayer]:  (Default value = None)
+        :param formatting: Optional[Formatting]:  (Default value = None)
+        :param hyperlink: Optional[Union[AnyUrl, Path]]:  (Default value = None)
+        """
+        item = self.add_text(
+            label=DocItemLabel.FIELD_KEY,
+            text=text,
+            orig=orig,
+            prov=prov,
+            parent=parent,
+            content_layer=content_layer,
+            formatting=formatting,
+            hyperlink=hyperlink,
+        )
+        return item
+
+    def add_field_value(
+        self,
+        text: str,
+        orig: Optional[str] = None,
+        prov: Optional[ProvenanceItem] = None,
+        parent: Optional[NodeItem] = None,
+        content_layer: Optional[ContentLayer] = None,
+        formatting: Optional[Formatting] = None,
+        hyperlink: Optional[Union[AnyUrl, Path]] = None,
+        kind: Optional[typing.Literal["read_only", "fillable"]] = "read_only",
+    ):
+        """add_field_value.
+
+        :param label: DocItemLabel:
+        :param text: str:
+        :param orig: Optional[str]:  (Default value = None)
+        :param level: LevelNumber:  (Default value = 1)
+        :param prov: Optional[ProvenanceItem]:  (Default value = None)
+        :param parent: Optional[NodeItem]:  (Default value = None)
+        :param content_layer: Optional[ContentLayer]:  (Default value = None)
+        :param formatting: Optional[Formatting]:  (Default value = None)
+        :param hyperlink: Optional[Union[AnyUrl, Path]]:  (Default value = None)
+        :param kind: Optional[typing.Literal["read_only", "fillable", "fillable_with_hint"]]:  (Default value = "read_only")
+        """
+        if not parent:
+            parent = self.body
+
+        if not orig:
+            orig = text
+
+        text_index = len(self.texts)
+        cref = f"#/texts/{text_index}"
+        item = FieldValueItem(
+            text=text,
+            orig=orig,
+            self_ref=cref,
+            parent=parent.get_ref(),
+            formatting=formatting,
+            hyperlink=hyperlink,
+            kind=kind,
+        )
+        if prov:
+            item.prov.append(prov)
+        if content_layer:
+            item.content_layer = content_layer
+
+        self.texts.append(item)
+        parent.children.append(RefItem(cref=cref))
+
+        return item
+
+    def add_field_hint(
+        self,
+        text: str,
+        orig: Optional[str] = None,
+        prov: Optional[ProvenanceItem] = None,
+        parent: Optional[NodeItem] = None,
+        content_layer: Optional[ContentLayer] = None,
+        formatting: Optional[Formatting] = None,
+        hyperlink: Optional[Union[AnyUrl, Path]] = None,
+    ):
+        """add_field_hint.
+
+        :param text: str:
+        :param orig: Optional[str]:  (Default value = None)
+        :param prov: Optional[ProvenanceItem]:  (Default value = None)
+        :param parent: Optional[NodeItem]:  (Default value = None)
+        :param content_layer: Optional[ContentLayer]:  (Default value = None)
+        :param formatting: Optional[Formatting]:  (Default value = None)
+        :param hyperlink: Optional[Union[AnyUrl, Path]]:  (Default value = None)
+        """
+        item = self.add_text(
+            label=DocItemLabel.FIELD_HINT,
+            text=text,
+            orig=orig,
+            prov=prov,
+            parent=parent,
+            content_layer=content_layer,
+            formatting=formatting,
+            hyperlink=hyperlink,
+        )
+        return item
+
+    def add_marker(
+        self,
+        text: str,
+        orig: Optional[str] = None,
+        prov: Optional[ProvenanceItem] = None,
+        parent: Optional[NodeItem] = None,
+        content_layer: Optional[ContentLayer] = None,
+        formatting: Optional[Formatting] = None,
+        hyperlink: Optional[Union[AnyUrl, Path]] = None,
+    ):
+        """add_marker.
+
+        :param text: str:
+        :param orig: Optional[str]:  (Default value = None)
+        :param prov: Optional[ProvenanceItem]:  (Default value = None)
+        :param parent: Optional[NodeItem]:  (Default value = None)
+        :param content_layer: Optional[ContentLayer]:  (Default value = None)
+        :param formatting: Optional[Formatting]:  (Default value = None)
+        :param hyperlink: Optional[Union[AnyUrl, Path]]:  (Default value = None)
+        """
+        item = self.add_text(
+            label=DocItemLabel.MARKER,
+            text=text,
+            orig=orig,
+            prov=prov,
+            parent=parent,
+            content_layer=content_layer,
+            formatting=formatting,
+            hyperlink=hyperlink,
+        )
+        return item
 
     # ---------------------------
     # Node Item Insertion Methods
@@ -4591,18 +3202,32 @@ class DoclingDocument(BaseModel):
         """num_pages."""
         return len(self.pages.values())
 
-    def validate_tree(self, root: NodeItem) -> bool:
+    def validate_tree(self, root: NodeItem, raise_on_error: bool = False) -> bool:
         """validate_tree."""
+        # TODO add check if heading levels conflict with hierarchy (e.g. level-1 heading with level-2 parent)
         for child_ref in root.children:
             child = child_ref.resolve(self)
-            if child.parent.resolve(self) != root or not self.validate_tree(child):
+            if child.parent.resolve(self) != root or not self.validate_tree(child, raise_on_error=raise_on_error):
+                if raise_on_error:
+                    raise ValueError(
+                        f"Document hierarchy is inconsistent. {root.self_ref} has child {child.self_ref} "
+                        f"with parent {child.parent.resolve(self).self_ref}"
+                    )
                 return False
 
         if isinstance(root, TableItem):
+            root_children_crefs = {child.cref for child in root.children}
             for cell in root.data.table_cells:
                 if isinstance(cell, RichTableCell) and (
-                    (par_ref := cell.ref.resolve(self).parent) is None or par_ref.resolve(self) != root
+                    (par_ref := cell.ref.resolve(self).parent) is None
+                    or par_ref.resolve(self) != root
+                    or cell.ref.cref not in root_children_crefs
                 ):
+                    if raise_on_error:
+                        raise ValueError(
+                            f"Document hierarchy is inconsistent. {root.self_ref} has cell {cell.ref.cref} "
+                            f"with parent {cell.ref.resolve(self).parent.resolve(self).self_ref}"
+                        )
                     return False
 
         return True
@@ -4735,52 +3360,88 @@ class DoclingDocument(BaseModel):
 
         return result
 
+    @staticmethod
+    def _save_image_and_resolve_uri(
+        img: PILImage.Image,
+        loc_path: Path,
+        reference_path: Optional[Path],
+    ) -> Union[AnyUrl, Path]:
+        """Save *img* to *loc_path* and return the URI to store on the ImageRef.
+
+        Uses a BytesIO intermediate buffer so that the write is compatible with
+        UPath remote backends (PIL cannot write directly to non-local paths).
+        For remote paths the URI is returned as an absolute AnyUrl string; for
+        local paths it is returned relative to *reference_path* when available,
+        or as the absolute *loc_path* when *reference_path* is None.
+
+        Args:
+            img: The PIL image to save.
+            loc_path: Destination path (local or remote UPath).
+            reference_path: Base path used to compute a relative URI for local
+                storage. Pass ``None`` to store the absolute path instead.
+
+        Returns:
+            An AnyUrl for remote paths, or a Path (relative or absolute) for local paths.
+        """
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        loc_path.write_bytes(buf.getvalue())
+
+        if is_remote_path(loc_path) or is_remote_path(reference_path):
+            return AnyUrl(str(loc_path))
+        if reference_path is not None:
+            return relative_path(reference_path.resolve(), loc_path.resolve())
+        return loc_path
+
     def _with_pictures_refs(
         self,
         image_dir: Path,
         page_no: Optional[int],
         reference_path: Optional[Path] = None,
+        include_page_images: bool = False,
     ) -> "DoclingDocument":
         """Document with images as refs.
 
         Creates a copy of this document where all picture data is
         saved to image_dir and referenced through file URIs.
+
+        When ``include_page_images`` is True, the page images are saved to
+        image_dir and referenced through file URIs as well (instead of being
+        kept as embedded base64 blobs).
         """
         result: DoclingDocument = copy.deepcopy(self)
 
-        img_count = 0
         image_dir.mkdir(parents=True, exist_ok=True)
 
-        if image_dir.is_dir():
-            for item, _ in result.iterate_items(page_no=page_no, with_groups=False):
-                if isinstance(item, PictureItem):
-                    img = item.get_image(doc=self)
-                    if img is not None:
-                        hexhash = PictureItem._image_to_hexhash(img)
+        img_count = 0
+        for item, _ in result.iterate_items(page_no=page_no, with_groups=False):
+            if isinstance(item, PictureItem):
+                img = item.get_image(doc=self)
+                if img is not None:
+                    hexhash = PictureItem._image_to_hexhash(img)
+                    if hexhash is not None:
+                        loc_path = image_dir / f"image_{img_count:06}_{hexhash}.png"
+                        obj_path = self._save_image_and_resolve_uri(img, loc_path, reference_path)
+                        if item.image is None:
+                            scale = img.size[0] / item.prov[0].bbox.width
+                            item.image = ImageRef.from_pil(image=img, dpi=round(72 * scale))
+                        item.image.uri = obj_path  # type: ignore[assignment]
+                img_count += 1
 
-                        # loc_path = image_dir / f"image_{img_count:06}.png"
-                        if hexhash is not None:
-                            loc_path = image_dir / f"image_{img_count:06}_{hexhash}.png"
-
-                            img.save(loc_path)
-                            if reference_path is not None:
-                                obj_path = relative_path(
-                                    reference_path.resolve(),
-                                    loc_path.resolve(),
-                                )
-                            else:
-                                obj_path = loc_path
-
-                            if item.image is None:
-                                scale = img.size[0] / item.prov[0].bbox.width
-                                item.image = ImageRef.from_pil(image=img, dpi=round(72 * scale))
-                            elif item.image is not None:
-                                item.image.uri = Path(obj_path)
-
-                        # if item.image._pil is not None:
-                        #    item.image._pil.close()
-
-                    img_count += 1
+        if include_page_images:
+            for p_no, page in result.pages.items():
+                if page_no is not None and p_no != page_no:
+                    continue
+                if page.image is None:
+                    continue
+                img = page.image.pil_image
+                if img is None:
+                    continue
+                hexhash = PictureItem._image_to_hexhash(img)
+                if hexhash is None:
+                    continue
+                loc_path = image_dir / f"page_{p_no:06}_{hexhash}.png"
+                page.image.uri = self._save_image_and_resolve_uri(img, loc_path, reference_path)  # type: ignore[assignment]
 
         return result
 
@@ -4841,13 +3502,18 @@ class DoclingDocument(BaseModel):
         artifacts_dir, reference_path = self._get_output_paths(filename, artifacts_dir)
 
         if image_mode == ImageRefMode.REFERENCED:
-            os.makedirs(artifacts_dir, exist_ok=True)
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
 
-        new_doc = self._make_copy_with_refmode(artifacts_dir, image_mode, page_no=None, reference_path=reference_path)
+        new_doc = self._make_copy_with_refmode(
+            artifacts_dir,
+            image_mode,
+            page_no=None,
+            reference_path=reference_path,
+            include_page_images=True,
+        )
 
         out = new_doc.export_to_dict(coord_precision=coord_precision, confid_precision=confid_precision)
-        with open(filename, "w", encoding="utf-8") as fw:
-            json.dump(out, fw, indent=indent)
+        filename.write_text(json.dumps(out, indent=indent), encoding="utf-8")
 
     @classmethod
     def load_from_json(cls, filename: Union[str, Path]) -> "DoclingDocument":
@@ -4862,8 +3528,7 @@ class DoclingDocument(BaseModel):
         """
         if isinstance(filename, str):
             filename = Path(filename)
-        with open(filename, encoding="utf-8") as f:
-            return cls.model_validate_json(f.read())
+        return cls.model_validate_json(filename.read_text(encoding="utf-8"))
 
     def save_as_yaml(
         self,
@@ -4880,13 +3545,20 @@ class DoclingDocument(BaseModel):
         artifacts_dir, reference_path = self._get_output_paths(filename, artifacts_dir)
 
         if image_mode == ImageRefMode.REFERENCED:
-            os.makedirs(artifacts_dir, exist_ok=True)
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
 
-        new_doc = self._make_copy_with_refmode(artifacts_dir, image_mode, page_no=None, reference_path=reference_path)
+        new_doc = self._make_copy_with_refmode(
+            artifacts_dir,
+            image_mode,
+            page_no=None,
+            reference_path=reference_path,
+            include_page_images=True,
+        )
 
         out = new_doc.export_to_dict(coord_precision=coord_precision, confid_precision=confid_precision)
-        with open(filename, "w", encoding="utf-8") as fw:
-            yaml.dump(out, fw, default_flow_style=default_flow_style)
+        stream = StringIO()
+        yaml.dump(out, stream, default_flow_style=default_flow_style)
+        filename.write_text(stream.getvalue(), encoding="utf-8")
 
     @classmethod
     def load_from_yaml(cls, filename: Union[str, Path]) -> "DoclingDocument":
@@ -4900,8 +3572,7 @@ class DoclingDocument(BaseModel):
         """
         if isinstance(filename, str):
             filename = Path(filename)
-        with open(filename, encoding="utf-8") as f:
-            data = yaml.load(f, Loader=yaml.SafeLoader)
+        data = yaml.load(filename.read_text(encoding="utf-8"), Loader=yaml.SafeLoader)
         return DoclingDocument.model_validate(data)
 
     def export_to_dict(
@@ -4943,6 +3614,8 @@ class DoclingDocument(BaseModel):
         include_annotations: bool = True,
         compact_tables: bool = False,
         *,
+        enable_chart_tables: bool = True,
+        traverse_pictures: bool = False,
         mark_meta: bool = False,
         use_legacy_annotations: Optional[bool] = None,  # deprecated
     ):
@@ -4952,7 +3625,7 @@ class DoclingDocument(BaseModel):
         artifacts_dir, reference_path = self._get_output_paths(filename, artifacts_dir)
 
         if image_mode == ImageRefMode.REFERENCED:
-            os.makedirs(artifacts_dir, exist_ok=True)
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
 
         new_doc = self._make_copy_with_refmode(artifacts_dir, image_mode, page_no, reference_path=reference_path)
 
@@ -4965,6 +3638,7 @@ class DoclingDocument(BaseModel):
             escape_html=escape_html,
             escape_underscores=escaping_underscores,
             image_placeholder=image_placeholder,
+            enable_chart_tables=enable_chart_tables,
             image_mode=image_mode,
             indent=indent,
             text_width=text_width,
@@ -4973,12 +3647,12 @@ class DoclingDocument(BaseModel):
             page_break_placeholder=page_break_placeholder,
             include_annotations=include_annotations,
             compact_tables=compact_tables,
+            traverse_pictures=traverse_pictures,
             use_legacy_annotations=use_legacy_annotations,
             mark_meta=mark_meta,
         )
 
-        with open(filename, "w", encoding="utf-8") as fw:
-            fw.write(md_out)
+        filename.write_text(md_out, encoding="utf-8")
 
     def export_to_markdown(
         self,
@@ -5000,6 +3674,7 @@ class DoclingDocument(BaseModel):
         include_annotations: bool = True,
         mark_annotations: bool = False,
         compact_tables: bool = False,
+        traverse_pictures: bool = False,
         *,
         use_legacy_annotations: Optional[bool] = None,  # deprecated
         allowed_meta_names: Optional[set[str]] = None,
@@ -5052,6 +3727,11 @@ class DoclingDocument(BaseModel):
         :type mark_annotations: bool = False
         :param compact_tables: bool: Whether to use compact table format without column padding. (Default value = False).
         :type compact_tables: bool = False
+        :param traverse_pictures: bool: Whether to traverse into picture items and
+            serialize their text children. Must be set to True for scanned/image-based
+            PDFs processed with full-page OCR, where the layout model places all OCR
+            text as children of a top-level PictureItem. (Default value = False).
+        :type traverse_pictures: bool = False
         :param use_legacy_annotations: bool: Deprecated; legacy annotations considered only when meta not present.
         :type use_legacy_annotations: Optional[bool] = None
         :param mark_meta: bool: Whether to mark meta in the export
@@ -5099,6 +3779,7 @@ class DoclingDocument(BaseModel):
                 blocked_meta_names=blocked_meta_names or set(),
                 mark_annotations=mark_annotations,
                 compact_tables=compact_tables,
+                traverse_pictures=traverse_pictures,
             ),
         )
         ser_res = serializer.serialize()
@@ -5123,8 +3804,9 @@ class DoclingDocument(BaseModel):
         page_no: Optional[int] = None,
         included_content_layers: Optional[set[ContentLayer]] = None,
         page_break_placeholder: Optional[str] = None,
+        traverse_pictures: bool = False,
     ) -> str:
-        """Export to plain text.
+        r"""Export to plain text.
 
         Produces clean plain text without any Markdown decoration. Heading
         markers (``#``), bold/italic markers, and hyperlink syntax are all
@@ -5148,6 +3830,11 @@ class DoclingDocument(BaseModel):
         :param page_break_placeholder: String inserted at page boundaries. None means
             no page-break marker is emitted.
         :type page_break_placeholder: Optional[str] = None
+        :param traverse_pictures: bool: Whether to traverse into picture items and
+            include their text children. Must be set to True for scanned/image-based
+            PDFs processed with full-page OCR, where the layout model places all OCR
+            text as children of a top-level PictureItem. (Default value = False).
+        :type traverse_pictures: bool = False
         :returns: The exported plain-text representation.
         :rtype: str
         """
@@ -5173,6 +3860,7 @@ class DoclingDocument(BaseModel):
                 start_idx=from_element,
                 stop_idx=to_element,
                 page_break_placeholder=page_break_placeholder,
+                traverse_pictures=traverse_pictures,
             ),
         )
         return serializer.serialize().text
@@ -5200,7 +3888,7 @@ class DoclingDocument(BaseModel):
         artifacts_dir, reference_path = self._get_output_paths(filename, artifacts_dir)
 
         if image_mode == ImageRefMode.REFERENCED:
-            os.makedirs(artifacts_dir, exist_ok=True)
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
 
         new_doc = self._make_copy_with_refmode(artifacts_dir, image_mode, page_no, reference_path=reference_path)
 
@@ -5218,16 +3906,30 @@ class DoclingDocument(BaseModel):
             include_annotations=include_annotations,
         )
 
-        with open(filename, "w", encoding="utf-8") as fw:
-            fw.write(html_out)
+        filename.write_text(html_out, encoding="utf-8")
 
     def _get_output_paths(
-        self, filename: Union[str, Path], artifacts_dir: Optional[Path] = None
+        self,
+        filename: Path,
+        artifacts_dir: Optional[Path] = None,
     ) -> tuple[Path, Optional[Path]]:
-        if isinstance(filename, str):
-            filename = Path(filename)
+        """Resolve output and artifacts directory paths from the given filename.
+
+        Both ``Path`` and ``UPath`` objects are accepted since ``UPath`` is ``Path``-compatible for local paths, and remote ``UPath`` objects implement the same interface used here (``with_suffix``, ``with_name``,
+        ``is_absolute``, ``parent``, ``/``).
+
+        Args:
+            filename: Destination file path.
+            artifacts_dir: Optional explicit artifacts directory. When ``None``, a sibling
+                directory named ``<stem>_artifacts`` is derived from ``filename``.
+
+        Returns:
+            A tuple of ``(artifacts_dir, reference_path)`` where ``reference_path`` is
+            the parent of ``filename`` when ``artifacts_dir`` is relative, or ``None``
+            when it is absolute.
+        """
         if artifacts_dir is None:
-            # Remove the extension and add '_pictures'
+            # Remove the extension and add '_artifacts'
             artifacts_dir = filename.with_suffix("")
             artifacts_dir = artifacts_dir.with_name(artifacts_dir.name + "_artifacts")
         if artifacts_dir.is_absolute():
@@ -5244,12 +3946,18 @@ class DoclingDocument(BaseModel):
         image_mode: ImageRefMode,
         page_no: Optional[int],
         reference_path: Optional[Path] = None,
+        include_page_images: bool = False,
     ):
         new_doc = None
         if image_mode == ImageRefMode.PLACEHOLDER:
             new_doc = self
         elif image_mode == ImageRefMode.REFERENCED:
-            new_doc = self._with_pictures_refs(image_dir=artifacts_dir, page_no=page_no, reference_path=reference_path)
+            new_doc = self._with_pictures_refs(
+                image_dir=artifacts_dir,
+                page_no=page_no,
+                reference_path=reference_path,
+                include_page_images=include_page_images,
+            )
         elif image_mode == ImageRefMode.EMBEDDED:
             new_doc = self._with_embedded_pictures()
         else:
@@ -5320,7 +4028,7 @@ class DoclingDocument(BaseModel):
         """Serializes the Docling document to WebVTT format.
 
         Args:
-            included_content_layers: The content layers to serializes. If ommitted, the `DEFAULT_CONTENT_LAYERS` will
+            included_content_layers: The content layers to serialize. If omitted, the `DEFAULT_CONTENT_LAYERS` will
                 be serialized.
             omit_hours_if_zero: If True, omit hours when they are 0 in the timings.
             omit_voice_end: If True and cue blocks have a WebVTT cue voice span as the only component, omit the voice
@@ -5329,7 +4037,6 @@ class DoclingDocument(BaseModel):
         Returns:
             A string representation of the Docling document in WebVTT format.
         """
-
         from docling_core.transforms.serializer.webvtt import WebVTTDocSerializer, WebVTTParams
 
         my_layers = included_content_layers if included_content_layers is not None else DEFAULT_CONTENT_LAYERS
@@ -5355,7 +4062,7 @@ class DoclingDocument(BaseModel):
 
         Args:
             filename: The path to the WebVTT file.
-            included_content_layers: The content layers to serializes. If ommitted, the `DEFAULT_CONTENT_LAYERS` will
+            included_content_layers: The content layers to serialize. If omitted, the `DEFAULT_CONTENT_LAYERS` will
                 be serialized.
             omit_hours_if_zero: If True, omit hours when they are 0 in the timings.
             omit_voice_end: If True and cue blocks have a WebVTT cue voice span as the only component, omit the voice
@@ -5370,8 +4077,7 @@ class DoclingDocument(BaseModel):
             omit_voice_end=omit_voice_end,
         )
 
-        with open(filename, "w", encoding="utf-8") as fw:
-            fw.write(vtt_out)
+        filename.write_text(vtt_out, encoding="utf-8")
 
     @staticmethod
     def load_from_doctags(  # noqa: C901
@@ -5402,6 +4108,7 @@ class DoclingDocument(BaseModel):
             "footnote": DocItemLabel.FOOTNOTE,
             "code": DocItemLabel.CODE,
             "key_value_region": DocItemLabel.KEY_VALUE_REGION,
+            "key_value_map": DocItemLabel.FIELD_REGION,
         }
 
         doc = DoclingDocument(name=document_name)
@@ -5418,7 +4125,11 @@ class DoclingDocument(BaseModel):
 
         def extract_inner_text(text_chunk: str) -> str:
             """Strip all <...> tags (except <_..._>) to get the raw text content."""
-            return re.sub(r"<(?!_.*?_>).*?>", "", text_chunk, flags=re.DOTALL).strip()
+            # The tag name must start with a letter or "/", and the match must
+            # not cross a ">" boundary. This avoids deleting spans of plain text
+            # that merely contain "<" followed by a later ">" (e.g. statistical
+            # notation like "P < 0.05 ... P > 0.05"). See #618.
+            return re.sub(r"<(?!_.*?_>)[a-zA-Z/][^>]*>", "", text_chunk).strip()
 
         def extract_caption(
             text_chunk: str,
@@ -5443,39 +4154,60 @@ class DoclingDocument(BaseModel):
             """Extract any picture classification label from the chunk."""
             label = None
 
-            # All possible picture classification labels
-            all_labels = [
-                # Charts
-                PictureClassificationLabel.PIE_CHART,
-                PictureClassificationLabel.BAR_CHART,
-                PictureClassificationLabel.STACKED_BAR_CHART,
-                PictureClassificationLabel.LINE_CHART,
-                PictureClassificationLabel.FLOW_CHART,
-                PictureClassificationLabel.SCATTER_CHART,
-                PictureClassificationLabel.HEATMAP,
-                # Images
-                PictureClassificationLabel.NATURAL_IMAGE,
-                PictureClassificationLabel.REMOTE_SENSING,
-                # Company/Document elements
-                PictureClassificationLabel.ICON,
+            # Current v2 model labels (DocumentFigureClassifier-v2.0)
+            all_labels: list[PictureClassificationLabel | str] = [
                 PictureClassificationLabel.LOGO,
+                PictureClassificationLabel.PHOTOGRAPH,
+                PictureClassificationLabel.ICON,
+                PictureClassificationLabel.ENGINEERING_DRAWING,
+                PictureClassificationLabel.LINE_CHART,
+                PictureClassificationLabel.BAR_CHART,
+                PictureClassificationLabel.OTHER,
+                PictureClassificationLabel.TABLE,
+                PictureClassificationLabel.FLOW_CHART,
+                PictureClassificationLabel.SCREENSHOT_FROM_COMPUTER,
                 PictureClassificationLabel.SIGNATURE,
+                PictureClassificationLabel.SCREENSHOT_FROM_MANUAL,
+                PictureClassificationLabel.GEOGRAPHICAL_MAP,
+                PictureClassificationLabel.PIE_CHART,
+                PictureClassificationLabel.PAGE_THUMBNAIL,
                 PictureClassificationLabel.STAMP,
+                PictureClassificationLabel.MUSIC,
+                PictureClassificationLabel.CALENDAR,
                 PictureClassificationLabel.QR_CODE,
                 PictureClassificationLabel.BAR_CODE,
-                PictureClassificationLabel.SCREENSHOT,
-                # Chemistry
-                PictureClassificationLabel.MOLECULAR_STRUCTURE,
-                PictureClassificationLabel.MARKUSH_STRUCTURE,
-                # Other
-                PictureClassificationLabel.OTHER,
-                PictureClassificationLabel.PICTURE_GROUP,
-                # Legacy SmolDocling labels
-                "line",
-                "dot_line",
-                "vbar_categorical",
-                "hbar_categorical",
+                PictureClassificationLabel.FULL_PAGE_IMAGE,
+                PictureClassificationLabel.SCATTER_PLOT,
+                PictureClassificationLabel.CHEMISTRY_STRUCTURE,
+                PictureClassificationLabel.TOPOGRAPHICAL_MAP,
+                PictureClassificationLabel.CROSSWORD_PUZZLE,
+                PictureClassificationLabel.BOX_PLOT,
             ]
+
+            # Legacy v1 model labels
+            all_labels.extend(
+                [
+                    PictureClassificationLabel.STACKED_BAR_CHART,
+                    PictureClassificationLabel.SCATTER_CHART,
+                    PictureClassificationLabel.HEATMAP,
+                    PictureClassificationLabel.NATURAL_IMAGE,
+                    PictureClassificationLabel.REMOTE_SENSING,
+                    PictureClassificationLabel.SCREENSHOT,
+                    PictureClassificationLabel.MOLECULAR_STRUCTURE,
+                    PictureClassificationLabel.MARKUSH_STRUCTURE,
+                    PictureClassificationLabel.PICTURE_GROUP,
+                ]
+            )
+
+            # Legacy SmolDocling labels
+            all_labels.extend(
+                [
+                    "line",
+                    "dot_line",
+                    "vbar_categorical",
+                    "hbar_categorical",
+                ]
+            )
 
             # Mapping for legacy labels
             label_mapping = {
@@ -5956,8 +4688,7 @@ class DoclingDocument(BaseModel):
             minified=minified,
         )
 
-        with open(filename, "w", encoding="utf-8") as fw:
-            fw.write(out)
+        filename.write_text(out, encoding="utf-8")
 
     @deprecated("Use export_to_doctags() instead.")
     def export_to_document_tokens(self, *args, **kwargs):
@@ -6029,6 +4760,202 @@ class DoclingDocument(BaseModel):
         )
         ser_res = serializer.serialize()
         return ser_res.text
+
+    def export_to_doclang(
+        self,
+    ) -> str:
+        """Export to DocLang."""
+        from docling_core.transforms.serializer.doclang import DocLangDocSerializer, DocLangParams
+
+        serializer = DocLangDocSerializer(
+            doc=self,
+            params=DocLangParams(),
+        )
+        return serializer.serialize().text
+
+    def save_as_doclang(
+        self,
+        filename: Union[str, Path],
+    ) -> None:
+        """Save the document as DocLang."""
+        if isinstance(filename, str):
+            filename = Path(filename)
+        out = self.export_to_doclang()
+        filename.write_text(f"{out}\n", encoding="utf-8")
+
+    def save_as_doclang_archive(
+        self,
+        filename: Union[str, Path],
+        *,
+        artifacts_dir: Optional[Path] = None,
+        validate: bool = False,
+    ) -> None:
+        """Save the document as a DocLang OPC archive (``.dclx``).
+
+        Picture and page images are always stored outside the markup, under
+        ``assets/`` and ``pages/`` in the archive respectively.
+        """
+        from doclang import pack
+
+        from docling_core.transforms.serializer.doclang import DocLangDocSerializer, DocLangParams
+
+        if isinstance(filename, str):
+            filename = Path(filename)
+
+        def _write_archive(staging_root: Path) -> None:
+            assets_dir = staging_root / "assets"
+            pages_dir = staging_root / "pages"
+
+            doc = self._make_copy_with_refmode(
+                artifacts_dir=assets_dir,
+                image_mode=ImageRefMode.REFERENCED,
+                page_no=None,
+                reference_path=staging_root,
+            )
+
+            serializer = DocLangDocSerializer(
+                doc=doc,
+                params=DocLangParams(image_mode=ImageRefMode.REFERENCED),
+            )
+            document_path = staging_root / "document.dclg.xml"
+            document_path.write_text(f"{serializer.serialize().text}\n", encoding="utf-8")
+
+            pack_kwargs: dict[str, Any] = {
+                "document": document_path,
+                "output": filename,
+                "validate": validate,
+            }
+
+            pages: dict[int, Path] = {}
+            for p_no, page in self.pages.items():
+                if page.image is None:
+                    continue
+                img = page.image.pil_image
+                if img is None:
+                    continue
+                page_path = pages_dir / f"{p_no}.png"
+                page_path.parent.mkdir(parents=True, exist_ok=True)
+                img.save(page_path)
+                pages[p_no] = page_path
+            if pages:
+                pack_kwargs["pages"] = pages
+
+            if assets_dir.is_dir() and any(assets_dir.iterdir()):
+                pack_kwargs["assets"] = assets_dir
+
+            pack(**pack_kwargs)
+
+        if artifacts_dir is None:
+            with tempfile.TemporaryDirectory() as staging_name:
+                _write_archive(Path(staging_name))
+        else:
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+            _write_archive(artifacts_dir)
+
+    @classmethod
+    def load_from_doclang_archive(
+        cls,
+        filename: Union[str, Path],
+        *,
+        artifacts_dir: Optional[Path] = None,
+        validate: bool = False,
+        max_member_size: int = 512 * 1024 * 1024,  # 512 MiB
+        max_total_size: int = 2 * 1024 * 1024 * 1024,  # 2 GiB
+    ) -> "DoclingDocument":
+        """Load a DoclingDocument from a DocLang OPC archive (``.dclx``).
+
+        The archive is extracted to ``artifacts_dir`` (default: ``<name>_artifacts`` next
+        to the ``.dclx`` file). Relative ``<src uri=\"...\"/>`` paths and optional
+        ``pages/`` images are resolved inside that directory.
+
+        Args:
+            filename: Path to the ``.dclx`` archive.
+            artifacts_dir: Optional extraction directory for package members.
+            validate: When True, run DocLang XSD/Schematron validation on ``document.xml``.
+            max_member_size: Maximum uncompressed size in bytes for any single archive member
+                (default: 512 MiB).
+            max_total_size: Maximum cumulative uncompressed size in bytes for all members
+                (default: 2 GiB).
+
+        Notes:
+            ``document.xml`` is additionally capped by ``settings.max_doclang_xml_bytes`` before
+            parsing. Archive ``assets/`` and ``pages/`` images are capped by
+            ``settings.max_image_decoded_size`` before Pillow opens them.
+        """
+        from docling_core.transforms.deserializer.doclang import DocLangDocDeserializer
+
+        if isinstance(filename, str):
+            filename = Path(filename)
+
+        artifacts_dir, _ = cls(name="")._get_output_paths(filename, artifacts_dir)
+        safe_extract_zip_archive(
+            filename,
+            artifacts_dir,
+            max_member_size=max_member_size,
+            max_total_size=max_total_size,
+        )
+
+        document_xml = artifacts_dir / "document.xml"
+        if not document_xml.is_file():
+            raise ValueError(f"DocLang archive missing document.xml: {filename}")
+
+        # Fail closed before reading/parsing: zip member caps are far larger than a
+        # safe DocLang DOM budget.
+        _ensure_within_size_limit(
+            document_xml,
+            max_size=settings.max_doclang_xml_bytes,
+            label="DocLang document.xml",
+        )
+
+        if validate:
+            from doclang.validation import validate as doclang_validate
+
+            doclang_validate(document_xml)
+
+        doc = DocLangDocDeserializer().deserialize_str(
+            document_xml.read_text(encoding="utf-8"),
+            media_root=artifacts_dir,
+        )
+        doc.name = filename.stem
+        cls._restore_doclang_archive_page_images(doc=doc, archive_root=artifacts_dir)
+        return doc
+
+    @staticmethod
+    def _restore_doclang_archive_page_images(*, doc: "DoclingDocument", archive_root: Path) -> None:
+        pages_dir = archive_root / "pages"
+        if not pages_dir.is_dir():
+            return
+
+        archive_root = archive_root.resolve()
+        for page_file in sorted(pages_dir.iterdir()):
+            if not page_file.is_file():
+                continue
+
+            archive_rel = f"pages/{page_file.name}"
+            validate_archive_relative_path(archive_rel, label="page image")
+            resolved = resolve_archive_path(archive_root, archive_rel)
+            stem = page_file.stem
+            if not stem.isdigit():
+                continue
+
+            page_no = int(stem)
+            if page_no not in doc.pages:
+                continue
+
+            _ensure_within_size_limit(
+                resolved,
+                max_size=settings.max_image_decoded_size,
+                label="Archive page image",
+            )
+            with PILImage.open(resolved) as pil:
+                pil_copy = pil.copy()
+            mimetype = mimetypes.guess_type(page_file.name)[0] or "image/png"
+            doc.pages[page_no].image = ImageRef(
+                mimetype=mimetype,
+                dpi=72,
+                size=Size(width=pil_copy.width, height=pil_copy.height),
+                uri=resolved,
+            )
 
     def _export_to_indented_text(
         self,
@@ -6210,20 +5137,59 @@ class DoclingDocument(BaseModel):
             return CURRENT_VERSION
 
     @model_validator(mode="after")
+    def _validate_unique_refs(self) -> Self:
+        seen: set[str] = set()
+        item_lists: list[Iterable[NodeItem]] = [
+            self.groups,
+            self.texts,
+            self.pictures,
+            self.tables,
+            self.key_value_items,
+            self.form_items,
+            self.field_regions,
+            self.field_items,
+        ]
+        for item_list in item_lists:
+            for item in item_list:
+                if isinstance(item, NodeItem):
+                    if item.self_ref in seen:
+                        raise ValueError(f"Duplicate ref: {item.self_ref}")
+                    seen.add(item.self_ref)
+                else:
+                    raise ValueError(f"Unknown element encountered: {item}")
+        return self
+
+    def _normalize_table_children_from_rich_cells(self):
+        """Repair missing table child links for already-parented rich table cells."""
+        for table in self.tables:
+            child_crefs = {child.cref for child in table.children}
+
+            for cell in table.data.table_cells:
+                if not isinstance(cell, RichTableCell):
+                    continue
+
+                item = cell.ref.resolve(self)
+                if item.parent is not None and item.parent.cref == table.self_ref and cell.ref.cref not in child_crefs:
+                    table.children.append(cell.ref)
+                    child_crefs.add(cell.ref.cref)
+
+    @model_validator(mode="after")
     def validate_document(self) -> Self:
         """validate_document."""
         with warnings.catch_warnings():
             # ignore warning from deprecated furniture
             warnings.filterwarnings("ignore", category=DeprecationWarning)
-            if not self.validate_tree(self.body) or not self.validate_tree(self.furniture):
-                raise ValueError("Document hierachy is inconsistent.")
+            self.validate_tree(self.body, raise_on_error=True)
+            self.validate_tree(self.furniture, raise_on_error=True)
+
+        self._clamp_provenance_bboxes_to_pages()
 
         return self
 
     @model_validator(mode="after")
     def validate_misplaced_list_items(self) -> Self:
         """validate_misplaced_list_items."""
-        # find list items without list parent, putting succesive ones together
+        # find list items without list parent, putting successive ones together
         misplaced_list_items: list[list[ListItem]] = []
         prev: Optional[NodeItem] = None
         for item, _ in self.iterate_items(
@@ -6277,6 +5243,8 @@ class DoclingDocument(BaseModel):
         tables: list[TableItem] = []
         key_value_items: list[KeyValueItem] = []
         form_items: list[FormItem] = []
+        field_regions: list[FieldRegionItem] = []
+        field_items: list[FieldItem] = []
 
         pages: dict[int, PageItem] = {}
 
@@ -6300,7 +5268,16 @@ class DoclingDocument(BaseModel):
             self._names.append(doc.name)
 
             # record starting indices so post-processing only touches new items
-            post_processing_keys = ["texts", "pictures", "tables", "key_value_items", "form_items"]
+            post_processing_keys = [
+                "groups",
+                "texts",
+                "pictures",
+                "tables",
+                "key_value_items",
+                "form_items",
+                "field_regions",
+                "field_items",
+            ]
             start_indices = {k: len(self.get_item_list(k)) for k in post_processing_keys}
 
             # collect items in traversal order
@@ -6410,7 +5387,13 @@ class DoclingDocument(BaseModel):
                 self._max_page = new_max_page
 
         def get_name(self) -> str:
-            return " + ".join(self._names)
+            if not self._names:
+                return ""
+            squeezed: list[str] = [self._names[0]]
+            for name in self._names[1:]:
+                if name != squeezed[-1]:
+                    squeezed.append(name)
+            return " + ".join(squeezed)
 
     def _update_from_index(self, doc_index: "_DocIndex") -> None:
         if doc_index._body is not None:
@@ -6421,6 +5404,8 @@ class DoclingDocument(BaseModel):
         self.tables = doc_index.tables
         self.key_value_items = doc_index.key_value_items
         self.form_items = doc_index.form_items
+        self.field_regions = doc_index.field_regions
+        self.field_items = doc_index.field_items
         self.pages = doc_index.pages
         self.name = doc_index.get_name()
 
@@ -6444,7 +5429,7 @@ class DoclingDocument(BaseModel):
         for doc in docs:
             doc_index.index(doc=doc)
 
-        res_doc = DoclingDocument(name=" + ".join([doc.name for doc in docs]))
+        res_doc = DoclingDocument(name=doc_index.get_name())
         res_doc._update_from_index(doc_index)
         return res_doc
 
@@ -6516,7 +5501,3 @@ class DoclingDocument(BaseModel):
 
 
 # deprecated aliases (kept for backwards compatibility):
-BasePictureData = BaseAnnotation
-PictureDescriptionData = DescriptionAnnotation
-PictureMiscData = MiscAnnotation
-UnorderedList = ListGroup
